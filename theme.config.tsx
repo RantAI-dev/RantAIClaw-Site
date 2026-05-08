@@ -1,7 +1,12 @@
 import type { DocsThemeConfig } from 'nextra-theme-docs'
 
 const config: DocsThemeConfig = {
-  logo: <strong>RantAIClaw</strong>,
+  logo: (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+      <img src="/logo.png" alt="" width={28} height={28} />
+      <strong>RantAIClaw</strong>
+    </span>
+  ),
   project: {
     link: 'https://github.com/RantAI-dev/RantAIClaw',
   },
