@@ -1,0 +1,86 @@
+---
+title: Install
+description: Install RantAIClaw via the one-line bootstrap script, prebuilt binaries, or building from source.
+---
+
+# Install
+
+## Quick install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RantAI-dev/RantAIClaw/main/scripts/bootstrap.sh | bash
+```
+
+The script:
+
+- detects your platform (Linux x86_64/aarch64/armv7, macOS Intel/Apple Silicon),
+- downloads the matching prebuilt binary from the [latest release](https://github.com/RantAI-dev/RantAIClaw/releases/latest),
+- verifies its SHA256 checksum,
+- installs to `~/.cargo/bin` or `~/.local/bin`,
+- prints the `export PATH=...` line for your shell if needed.
+
+No Rust toolchain. No compiler. No `git clone`.
+
+## Verify
+
+```bash
+rantaiclaw --version
+```
+
+If you see `command not found`, the installer printed a `PATH` export — copy that line into your shell rc and re-source it.
+
+## Windows
+
+Native Windows is not yet supported by the installer. Two options:
+
+- **WSL2** — install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then run the bootstrap script from inside the Linux environment.
+- **Manual** — download `x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/RantAI-dev/RantAIClaw/releases/latest) and place `rantaiclaw.exe` somewhere on your `PATH`.
+
+## Building from source
+
+If you have Rust 1.91+ installed:
+
+```bash
+git clone https://github.com/RantAI-dev/RantAIClaw.git
+cd RantAIClaw
+cargo build --release
+./target/release/rantaiclaw --version
+```
+
+The release profile is tuned for size (`opt-level = "z"`, `lto = "fat"`, `codegen-units = 1`, `strip = true`, `panic = "abort"`) — the resulting binary is ~12 MB.
+
+For faster local builds at the cost of binary size, use the `release-fast` profile:
+
+```bash
+cargo build --profile release-fast
+```
+
+## Optional features
+
+RantAIClaw uses Cargo features to keep the default binary small. Opt in to the ones you need:
+
+| Feature | Adds |
+|---|---|
+| `tui` | Terminal UI (default-enabled) |
+| `hardware` | USB / serial peripheral discovery (`nusb` + `tokio-serial`) |
+| `channel-matrix` | Matrix E2EE channel |
+| `channel-lark` | Lark/Feishu channel |
+| `memory-postgres` | PostgreSQL memory backend |
+| `observability-otel` | OpenTelemetry trace + metrics export |
+| `whatsapp-web` | Native WhatsApp Web client (`wa-rs`) |
+| `browser-native` | Headless browser tool via `fantoccini` |
+| `peripheral-rpi` | Raspberry Pi GPIO peripherals |
+| `probe` | STM32 / Nucleo memory read via `probe-rs` |
+| `rag-pdf` | PDF ingestion via `pdf-extract` |
+| `sandbox-bubblewrap` | Bubblewrap sandbox (the only sandbox path on macOS) |
+| `sandbox-landlock` | (no-op alias kept for backward compat — Landlock is compiled in unconditionally on Linux) |
+
+Combine them at build time:
+
+```bash
+cargo build --release --features "channel-matrix,memory-postgres,observability-otel"
+```
+
+## Next
+
+[Run the setup wizard](/docs/getting-started/first-agent) to bring up your first agent.

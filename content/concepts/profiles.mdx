@@ -1,0 +1,97 @@
+---
+title: Profiles
+description: How RantAIClaw isolates configuration, memory, secrets, and skills per "profile" — the dominant on-disk reality since v0.5.0.
+---
+
+# Profiles
+
+Since **v0.5.0**, RantAIClaw stores almost everything per-profile. A profile is a self-contained workspace at `~/.rantaiclaw/profiles/<name>/` that owns its config, persona, memory, skills, secrets, and audit log. You can have many profiles on one host; only one is "active" at a time.
+
+Profiles are how you keep a personal agent separate from a work agent, keep two different persona experiments separate, or run multiple agents simultaneously each with its own credentials. The system is invisible if you only have one — `default` is always there.
+
+## Where things live
+
+```
+~/.rantaiclaw/
+├── .secret_key                          # AEAD master key (mode 0600)
+├── active_profile                       # plain text — name of the active profile
+├── config.toml                          # legacy flat config (still honored)
+└── profiles/
+    └── <name>/
+        ├── config.toml                  # static config for this profile
+        ├── config.runtime.toml          # planned live overrides (see note below)
+        ├── audit.log                    # append-only JSONL audit log
+        ├── persona/
+        │   ├── persona.toml             # persona metadata
+        │   └── SYSTEM.md                # system prompt body
+        ├── policy/
+        │   ├── autonomy.toml            # written by L1–L4 preset selector
+        │   ├── command_allowlist.toml   # glob patterns for shell commands
+        │   └── forbidden_paths.toml     # path blocklist
+        ├── secrets/
+        │   └── api_keys.toml            # OAuth tokens for MCP integrations
+        ├── skills/                      # locally installed skills
+        └── workspace/
+            └── memory/
+                └── brain.db             # SQLite memory store
+```
+
+A few things about this tree:
+
+- **Same shape on Linux, macOS, and Windows.** RantAIClaw uses `home_dir()` from the `directories` crate — no XDG, no `~/Library/Application Support`. Whatever your OS calls home, the agent puts everything under `<home>/.rantaiclaw/`.
+- **Master key is at the rantaiclaw root**, not per-profile. All profiles share the same AEAD key for encrypting secret values.
+- **Most secrets live inline in `config.toml`** as `enc2:<hex>` strings, not in a separate `secrets.enc` blob. The `.secret_key` file is what decrypts them.
+- **`secrets/api_keys.toml`** is a separate per-profile TOML written by the OAuth flow (currently Google Drive, Google Calendar, Gmail).
+
+## Selecting the active profile
+
+Resolution order (first hit wins):
+
+1. **`--profile <name>` CLI flag** — overrides everything for that invocation
+2. **`RANTAICLAW_PROFILE` env var** — useful for systemd unit files, Docker entrypoints
+3. **`~/.rantaiclaw/active_profile` file** — written by `rantaiclaw profile use <name>`
+4. **`"default"`** — fallback
+
+The runtime never auto-creates a profile other than `default`. To make a new one, use the CLI.
+
+## CLI
+
+```bash
+rantaiclaw profile list                     # show all profiles, mark the active one
+rantaiclaw profile current                  # print the active profile name
+rantaiclaw profile create <name>            # provision a fresh profile directory
+rantaiclaw profile use <name>               # set active_profile and exit
+rantaiclaw profile clone <src> <dst>        # copy an existing profile
+```
+
+## Path resolution waterfall
+
+The runtime can be pointed at non-standard locations via env or marker files. The full waterfall (highest precedence first):
+
+1. **`RANTAICLAW_CONFIG_DIR`** — overrides the config directory entirely
+2. **`RANTAICLAW_WORKSPACE`** — overrides the workspace directory
+3. **`active_workspace.toml` marker** — pin a specific workspace from a wrapper
+4. **Profile-aware default** — `~/.rantaiclaw/profiles/<active>/`
+5. **Flat fallback** — `~/.rantaiclaw/` (legacy, pre-profile-system layouts)
+
+This is what makes Docker images, ephemeral CI runners, and "drop a workspace into /tmp and run there" patterns work without touching $HOME.
+
+## Static vs runtime config
+
+There are two config files per profile:
+
+- **`config.toml`** — hand-edited static config. Always loaded.
+- **`config.runtime.toml`** — *planned* file for HTTP-driven live overrides. **The loader exists in `src/config/runtime.rs` but is not currently called from `Config::load_or_init`.** That means today, edits intended for live overrides have no effect on the next startup. Treat this file as a planned feature, not a current one.
+
+When the live-config plumbing is wired up, the merge order will be:
+
+```
+config.toml  →  config.runtime.toml  →  RANTAICLAW_* env vars
+                                                   (env vars win)
+```
+
+## Why profiles matter for the docs you're reading
+
+Most pages on this site reference paths like "your config" or "the audit log." Unless we say otherwise, those paths are **profile-relative** — they live under `~/.rantaiclaw/profiles/<active>/`. If you have only one profile (the default `default`), everything works without you ever thinking about it. If you have several, the same instructions apply per-profile.
+
+When in doubt, run `rantaiclaw profile current` to see which profile your commands are operating on.

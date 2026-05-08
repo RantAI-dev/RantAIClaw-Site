@@ -1,0 +1,160 @@
+---
+title: Agent Loop
+description: How a message flows through orchestration — system prompt assembly, memory recall, provider call, approval gate, tool dispatch, and response.
+---
+
+# Agent Loop
+
+The agent loop in `src/agent/loop_.rs` turns a message into a reply. Everything else in the codebase exists to serve this loop.
+
+This page describes what actually happens at runtime. A few specifics will surprise you if you've used other agent frameworks — RantAIClaw makes some unusual choices.
+
+## High-level flow
+
+```
+   message in
+       │
+       ▼
+ ┌─────────────┐
+ │   Channel   │   spawned per-message,
+ │  (listen)   │   bounded by Semaphore
+ └──────┬──────┘   (max_in_flight_messages)
+        │
+        ▼
+ ┌─────────────┐    build system prompt        ┌──────────┐
+ │   Agent     │    + recall memories           │  Memory  │
+ │   Loop      │◄───  via build_context ───────│ (hybrid  │
+ │             │                                │  recall) │
+ └──────┬──────┘                                └──────────┘
+        │
+        ▼
+ ┌─────────────┐
+ │  Provider   │  → external LLM API
+ │  (chat or   │  (resilient: retries, fallback,
+ │   stream)   │   key rotation, retry-after)
+ └──────┬──────┘
+        │   tokens / tool call
+        ▼
+ ┌─────────────┐
+ │   Agent     │   text? tool call?
+ │   Loop      │
+ └──────┬──────┘
+        │
+        ├── text only ─────────────────────────┐
+        │                                      │
+        ▼                                      │
+   tool call?                                  │
+        │                                      │
+        ▼                                      │
+ ┌─────────────┐                               │
+ │  Approval   │  CLI: stdin prompt (blocks)   │
+ │   Gate      │  Other channels: hard-coded   │
+ │             │     deny if not in            │
+ │             │     auto_approve list         │
+ └──────┬──────┘                               │
+        │ approved                             │
+        ▼                                      │
+ ┌─────────────┐                               │
+ │   Tool      │  sequential by default;       │
+ │ dispatcher  │  parallel if                  │
+ │             │  agent.parallel_tools = true  │
+ └──────┬──────┘                               │
+        │                                      │
+        │ feed result back to provider         │
+        └──┐                                   │
+           ▼                                   │
+        (back to Provider)                     │
+                                               │
+                                               ▼
+                                       ┌─────────────┐
+                                       │   Channel   │
+                                       │   (send)    │
+                                       └─────────────┘
+```
+
+## System prompt assembly
+
+When the agent prepares a request to the provider, the **system prompt** is assembled in this order (`build_system_prompt_with_mode` in `src/channels/mod.rs`):
+
+1. **Tools** — the available tool list with JSON Schema parameter definitions (or a prompt-guided fallback for providers that don't support native tool calling)
+2. **Hardware** — declared hardware peripherals
+3. **Task instructions** — the active task's instructions, if any
+4. **Safety** — autonomy-related safety reminders
+5. **Skills** — installed skills' prompts (in `Full` mode) or just their listing (in `Compact` mode)
+6. **Workspace** — workspace summary
+7. **Project Context** — `CLAUDE.md` / AIEOS identity, sourced from project files
+8. **Date/Time** — current date/time
+9. **Runtime** — runtime metadata
+10. **Channel Capabilities** — what the originating channel can do (markdown, attachments, mentions, drafts)
+
+Notice what's *not* a discrete section: there is no dedicated "persona" stanza. Personas exist as on-disk files (`<profile>/persona/persona.toml` + `SYSTEM.md`) and are blended into the project-context / system prompt build at startup, not injected as a separate section per turn.
+
+## User message enrichment
+
+Memory recall is **prepended onto the user message** (not the system prompt). `build_context` in `src/agent/loop_.rs` queries memory for the K most relevant entries given the new message, filters by `min_relevance_score` (default `0.4`), and prepends them to the user-visible message.
+
+Recall is **hybrid**: BM25 lexical search + cosine vector search (when an embedding provider is configured), merged with weights `vector_weight = 0.7`, `keyword_weight = 0.3`. See [Memory](/docs/concepts/memory) for details.
+
+## Provider call
+
+The agent passes the assembled context to the active `Provider`. Streaming is preferred — the agent watches a `BoxStream<StreamResult<StreamChunk>>` and accumulates tokens.
+
+Provider failures are wrapped by `ReliableProvider` (`src/providers/reliable.rs`):
+
+- retry with exponential backoff (base 500ms, doubles capped at 10s)
+- multi-provider fallback chain
+- per-model fallback chain
+- API key rotation on 429
+- `Retry-After` header parsing
+
+The agent loop never sees transient failures.
+
+## Approval gate
+
+When the provider returns a tool call request, it does not go straight to execution. The dispatcher routes through `src/approval/mod.rs`:
+
+- **CLI channel** — interactive `stdin.read_line` prompt. The user types `y`/`yes` or `n`/`no`. **There is no timeout** — `timeout_secs = 60` is written to the policy file but no consumer reads it. If the user never responds, the loop hangs.
+- **Non-CLI channels (Discord, Telegram, etc.)** — the dispatcher hard-codes `ApprovalResponse::No` for anything not in the `auto_approve` list. There is no remote approval flow today.
+
+Tools listed in `[autonomy].auto_approve` skip the prompt; tools matching the command allowlist (for `shell`) skip too. The default `auto_approve` is `["file_read", "memory_recall"]` — only those two skip the prompt out of the box.
+
+If you want a tool to be callable from a non-CLI channel, **it must be in `auto_approve`** (or for `shell` commands, the command must match a pattern in `command_allowlist.toml`). Otherwise the dispatcher denies it without a prompt.
+
+See [Autonomy Levels](/docs/concepts/autonomy-levels) for the policy details.
+
+## Tool execution
+
+By default, tool calls within a single turn execute **sequentially** — `execute_tools_sequential` in `src/agent/loop_.rs`. This keeps the LLM's view of the world coherent (one tool result back at a time).
+
+You can opt into parallel execution per agent:
+
+```toml
+[agent]
+parallel_tools = true
+```
+
+When `parallel_tools = true`, `execute_tools_parallel` runs the batch concurrently with `tokio::join_all`. Useful for tools that don't share state (multiple file reads, parallel API calls).
+
+Each tool returns a `ToolResult { success, output, error }`. Errors are fed back to the provider as tool response messages — the model can choose to retry, escalate to the user, or move on.
+
+## Concurrency model
+
+- **Per-message tasks.** Each incoming message spawns a new tokio task. The number of in-flight messages across all channels is bounded by a semaphore (`max_in_flight_messages`).
+- **Channel listeners.** Each channel's `listen` runs in its own long-lived task — they don't block each other.
+- **Tool execution.** Sequential by default; parallel when configured.
+
+## Failure handling
+
+- **Provider errors after the resilient wrapper exhausts retries.** They propagate up `run_tool_call_loop` as a `Result::Err`. The daemon's component supervisor (`spawn_component_supervisor` in `src/daemon/mod.rs`) catches and restarts the affected component with backoff. There is no specific user-facing "polite error message in the originating channel" path today — that's behavior to be careful about claiming.
+- **Tool failures.** Returned as structured results to the provider; the model decides what to do.
+- **Channel disconnects.** Each channel has its own reconnect strategy with `channel_initial_backoff_secs` (default 2) ramping to `channel_max_backoff_secs` (default 60).
+- **Approval denies.** Returned as structured errors to the provider, allowing the model to retry differently.
+
+## Reading the code
+
+- `src/agent/loop_.rs` — `run_tool_call_loop`, `build_context`, `execute_tools_sequential`, `execute_tools_parallel`
+- `src/agent/memory_loader.rs` — recall + relevance filter
+- `src/channels/mod.rs` — `build_system_prompt_with_mode` and the dispatch loop
+- `src/approval/mod.rs` — approval gate for CLI vs non-CLI
+- `src/providers/reliable.rs` — retry / fallback / key rotation
+- `src/daemon/mod.rs` — component supervisor with backoff

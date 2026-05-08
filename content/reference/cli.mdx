@@ -1,0 +1,135 @@
+---
+title: CLI
+description: Every `rantaiclaw` top-level command. (Eventually generated from `rantaiclaw <cmd> --help`; today hand-written.)
+---
+
+# CLI
+
+> **v1 status:** hand-written from `src/main.rs` command enum. Will be generated from `--help` output once a generator script lands. The canonical reference in the upstream repo is [`docs/commands-reference.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/commands-reference.md).
+
+## Global flags
+
+These work on every subcommand:
+
+| Flag | Effect |
+|---|---|
+| `--profile <name>` | Operate on the named profile (default: `default`) |
+| `--config-dir <path>` | Override the config directory (overrides `RANTAICLAW_CONFIG_DIR`) |
+
+## Top-level commands
+
+| Command | Purpose |
+|---|---|
+| `rantaiclaw onboard` | Original interactive setup wizard (kept for backward compat) |
+| `rantaiclaw setup` | Canonical interactive setup; subcommands `setup mcp`, `setup hardware`, etc. |
+| `rantaiclaw agent` | Run an agent — interactive REPL (no flag) or one-shot (`--message`) |
+| `rantaiclaw chat` | Launch the terminal UI (TUI) — requires the `tui` feature |
+| `rantaiclaw daemon` | Production daemon — gateway + all channels + scheduler + heartbeat |
+| `rantaiclaw gateway [--port P] [--host H]` | Run only the gateway HTTP server (no channels) |
+| `rantaiclaw service` | Generate / install systemd / launchd / Windows service definitions |
+| `rantaiclaw doctor` | Validate install + config (exit 0 = pass, 1 = fail) |
+| `rantaiclaw status` | Print runtime status |
+| `rantaiclaw config <subcommand>` | Show, validate, or export config schema |
+| `rantaiclaw memory <subcommand>` | List, get, stats, clear memory entries |
+| `rantaiclaw skills <subcommand>` | List, show, install, remove skills (note: plural `skills`) |
+| `rantaiclaw cron <subcommand>` | Manage cron jobs |
+| `rantaiclaw models` | List models known to the active provider config |
+| `rantaiclaw providers` | List configured providers |
+| `rantaiclaw channel <subcommand>` | Channel management |
+| `rantaiclaw integrations` | External service integrations |
+| `rantaiclaw migrate` | Run profile / config migrations |
+| `rantaiclaw auth <subcommand>` | OAuth flows, device-code logins (Codex, Anthropic subscription, etc.) |
+| `rantaiclaw hardware` | Hardware discovery |
+| `rantaiclaw peripheral <subcommand>` | Hardware peripherals (STM32, RPi GPIO, ESP32, Arduino) |
+| `rantaiclaw session <subcommand>` | Inspect / manage sessions |
+| `rantaiclaw insights` | Show insights from session data |
+| `rantaiclaw personality` | Manage active persona |
+| `rantaiclaw profile <subcommand>` | Multi-profile management |
+| `rantaiclaw update` | Self-update (replace the binary) |
+| `rantaiclaw uninstall` | Remove the agent and (optionally) its data |
+| `rantaiclaw completions <shell>` | Print shell completion script |
+
+For exact flag names and behavior, run `rantaiclaw <command> --help`.
+
+## Notable absences
+
+You may have seen these documented elsewhere. They **do not exist** as top-level commands today:
+
+| Not a command | What you may want instead |
+|---|---|
+| `rantaiclaw run` | Use `rantaiclaw daemon` |
+| `rantaiclaw mcp` | MCP setup goes through `rantaiclaw setup mcp` |
+| `rantaiclaw secret` | Secrets are managed via `rantaiclaw setup` (encrypted inline as `enc2:<hex>` in `config.toml`) |
+| `rantaiclaw skill` (singular) | The CLI is plural: `rantaiclaw skills` |
+
+## Common usage
+
+```bash
+# First time
+rantaiclaw setup
+rantaiclaw doctor
+rantaiclaw chat
+
+# Production
+rantaiclaw daemon
+
+# Debugging a profile
+rantaiclaw --profile work doctor
+rantaiclaw --profile work memory stats
+
+# Adding a skill
+rantaiclaw skills install https://github.com/example/my-skill.git
+rantaiclaw skills list
+
+# Switching profiles
+rantaiclaw profile list
+rantaiclaw profile use work
+```
+
+## Subcommand surface (selected)
+
+### `rantaiclaw memory`
+
+```bash
+memory list [--category core|daily|conversation|<custom>] [--session <id>] [--limit N] [--offset N]
+memory get <key>
+memory stats
+memory clear [--category <c>] [--session <id>]
+```
+
+### `rantaiclaw skills`
+
+```bash
+skills list
+skills show <name>
+skills install <git-url-or-local-path>
+skills remove <name>
+```
+
+### `rantaiclaw cron`
+
+```bash
+cron list
+cron add <spec>
+cron remove <id>
+cron run <id>
+cron runs <id>
+```
+
+### `rantaiclaw profile`
+
+```bash
+profile list
+profile current
+profile create <name>
+profile use <name>
+profile clone <src> <dst>
+```
+
+### `rantaiclaw config`
+
+```bash
+config show
+config validate
+config schema --json     # exports JSON Schema (powered by schemars derive)
+```

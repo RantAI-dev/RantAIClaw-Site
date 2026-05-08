@@ -1,0 +1,33 @@
+---
+title: Hardware Peripherals
+description: Wire physical hardware (STM32, Raspberry Pi GPIO, sensors, USB / serial devices) into agents via the `Peripheral` trait.
+---
+
+# Hardware Peripherals
+
+> **v1 status:** stub. The rantaiclaw repo has [`docs/hardware-peripherals-design.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/hardware-peripherals-design.md) and a `docs/hardware/` directory with board-specific guides. Migrate-and-adapt content TBD.
+
+## The shape
+
+Peripherals implement the `Peripheral` trait in `src/peripherals/<your_board>.rs`. Each peripheral exposes one or more `tools()` — each tool wraps a specific hardware action (read GPIO, write GPIO, query sensor, send command to firmware).
+
+The agent never talks to the hardware directly. It calls a tool; the tool delegates to the peripheral; the peripheral talks to the device.
+
+## What ships
+
+| Peripheral | Build feature | Target |
+|---|---|---|
+| Raspberry Pi GPIO | `peripheral-rpi` | Linux on RPi |
+| STM32 / Nucleo (probe-rs) | `probe` | Any host that probe-rs supports |
+| Generic USB / serial | `hardware` (`nusb` + `tokio-serial`) | Linux, macOS, Windows |
+
+## Reference docs
+
+For now, the rantaiclaw repo's existing docs are the source of truth:
+
+- [`docs/hardware-peripherals-design.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/hardware-peripherals-design.md) — protocol and firmware notes
+- [`docs/adding-boards-and-tools.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/adding-boards-and-tools.md) — extension recipe
+- [`docs/nucleo-setup.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/nucleo-setup.md) — STM32 Nucleo walkthrough
+- [`docs/arduino-uno-q-setup.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/arduino-uno-q-setup.md) — Arduino walkthrough
+
+These will be migrated and adapted into this site in a later iteration.

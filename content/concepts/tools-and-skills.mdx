@@ -1,0 +1,240 @@
+---
+title: Tools & Skills
+description: Tools are actions the agent can take. Skills are markdown bundles of tools and instructions, distributed via ClawHub or auto-discovered from open-skills.
+---
+
+# Tools & Skills
+
+These two words are often used interchangeably outside RantAIClaw. Inside, they mean different things:
+
+| | **Tool** | **Skill** |
+|---|---|---|
+| **What it is** | A single action the agent can take | A bundle of tools + instructions for a domain task |
+| **Where it lives** | `src/tools/` (built-in) or as part of a skill | `<profile>/skills/<name>/` |
+| **Defined as** | Rust trait implementation | `SKILL.toml` (preferred) or `SKILL.md` |
+| **Distribution** | Compiled into the binary | Installed from ClawHub, written locally, or auto-discovered from open-skills |
+| **Example** | `shell`, `file_read`, `memory_store` | `deploy-checker`, `code-reviewer`, `meeting-summarizer` |
+
+## Tools
+
+### The Tool trait
+
+```rust
+// src/tools/traits.rs (simplified)
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters_schema(&self) -> serde_json::Value;
+    async fn execute(&self, args: serde_json::Value) -> anyhow::Result<ToolResult>;
+    fn spec(&self) -> ToolSpec { /* default */ }
+}
+
+pub struct ToolResult {
+    pub success: bool,
+    pub output: String,
+    pub error: Option<String>,
+}
+```
+
+`ToolResult` is a struct (not an enum). The convention is `success: false` + `error: Some("...")` for failures — tools never panic in the runtime path.
+
+### Schema validation — manual, not automatic
+
+The JSON Schema returned by `parameters_schema()` is what the LLM is told about. **It is not enforced by the runtime at execute time.** Tools manually pull args:
+
+```rust
+let query = args
+    .get("query")
+    .and_then(|v| v.as_str())
+    .ok_or_else(|| anyhow!("missing required parameter: query"))?;
+```
+
+So in practice, the schema is the LLM's contract; the per-tool validation code is the runtime's contract. They should match — that's a matter of discipline, not a runtime guarantee.
+
+### Built-in tools (always-on)
+
+| Name | What it does |
+|---|---|
+| `shell` | Execute a shell command (sandboxed, command-allowlisted) |
+| `file_read` | Read a file from the workspace |
+| `file_write` | Write a file to the workspace |
+| `glob_search` | Glob over workspace paths |
+| `cron_add` | Schedule a recurring job |
+| `cron_list` | List scheduled jobs |
+| `cron_remove` | Remove a scheduled job |
+| `cron_update` | Update a scheduled job |
+| `cron_run` | Run a scheduled job ad-hoc |
+| `cron_runs` | Inspect run history |
+| `memory_store` | Persist a fact |
+| `memory_recall` | Hybrid lexical+vector search over memory |
+| `memory_forget` | Delete a memory entry |
+| `schedule` | Schedule an action |
+| `proxy_config` | Read/update HTTP proxy config |
+| `git_operations` | Git commands wrapped as tool calls |
+| `pushover` | Send a Pushover notification |
+| `pdf_read` | Extract text from a PDF |
+| `screenshot` | Capture a screenshot |
+| `image_info` | Inspect image metadata |
+
+### Built-in tools (conditional)
+
+These only register when the relevant config or feature is enabled:
+
+| Tool | Gate |
+|---|---|
+| `browser_open` | `[browser].enabled = true` |
+| `browser` | same |
+| `http_request` | `[http_request].enabled = true` |
+| `web_search_tool` | `[web_search].enabled = true` (note the `_tool` suffix) |
+| `composio` | `[composio].api_key` is set |
+| `delegate` | `[[agents]]` is configured (multi-agent setups) |
+| `list_tasks`, `get_task`, `create_task`, `update_task_status`, `create_subtask`, `complete_subtask`, `review_task`, `add_comment`, `read_comments` | `[tasks].enabled = true` |
+
+### `default_tools` vs `all_tools`
+
+- **`default_tools()`** — `shell`, `file_read`, `file_write`, `glob_search`. Used when the agent runs in minimal mode.
+- **`all_tools_with_runtime()`** — every always-on tool above plus all conditionals whose gates are satisfied.
+
+The factory functions live in `src/tools/mod.rs`.
+
+### Adding a tool
+
+1. Create `src/tools/<your_tool>.rs` and implement the `Tool` trait
+2. Define a `parameters_schema()` JSON Schema
+3. Validate args inside `execute()` — the runtime won't do it for you
+4. Return `ToolResult { success, output, error }` — never panic
+5. Register in `src/tools/mod.rs` (pick `default_tools_with_runtime` or `all_tools_with_runtime` based on whether it's gated)
+
+## Skills
+
+### Two formats
+
+A skill is a directory under `<profile>/skills/<slug>/` containing one of:
+
+- **`SKILL.toml`** (preferred when both exist) — structured metadata; tool definitions parsed and exposed to the LLM as callable functions
+- **`SKILL.md`** (fallback) — markdown blob; the *whole content* is included in the agent's prompt
+
+The discovery code prefers `SKILL.toml` if both files exist in the same directory.
+
+### What `SKILL.md` actually does
+
+It's worth being precise here, because SKILL.md docs in the wild often describe a richer model than what the loader implements:
+
+- The loader takes the **directory name** as the skill's name.
+- It takes the **first non-heading non-blank line** as the skill's `description`.
+- It stuffs **the entire file content** into the skill's first prompt block.
+- It does **no parsing of `## Description`, `## Tools`, `## Instructions`, `## Match`, `## Metadata`, or `## Permissions` sections**. Those are *prose convention for the LLM*, not loader-enforced schema.
+- It does **not parse `kind: builtin` blocks as runtime tool definitions**. The bundled SKILL.md files use `kind: builtin` notation, but that text is only seen by the LLM — it does not register a callable tool.
+
+If you want a skill to expose a real LLM-callable tool, write `SKILL.toml`:
+
+```toml
+name = "deploy-checker"
+description = "Validates deployment readiness before release."
+
+[[tools]]
+name = "run_checks"
+description = "Run the pre-deploy validator script"
+kind = "shell"
+command = "./scripts/pre-deploy.sh"
+
+[[prompts]]
+content = """
+- Always run pre-deploy checks before approving a release
+- Report any failing checks with specific remediation steps
+"""
+```
+
+### Skill tool kinds
+
+When running through `SkillToolAdapter` (`src/tools/skill_tool.rs`), only two kinds are executable:
+
+| Kind | What it does |
+|---|---|
+| `shell` | Runs `command` via shell, returns stdout |
+| `http` | Makes an HTTP request, returns body |
+
+Any other `kind` returns an "Unsupported skill tool kind" error. `kind: builtin`, `template`, etc. are not executable from SKILL.toml today.
+
+Skill tools are exposed to the LLM with the prefix `skill_<skill>_<tool>` (underscores, not dots). 120s timeout, 1MB output cap.
+
+### Two prompt-injection modes
+
+```toml
+[skills]
+mode = "Full"     # default
+# or
+mode = "Compact"
+```
+
+- **`Full`** — embeds the full skill prompt and tool definitions inline in the system prompt
+- **`Compact`** — includes only `name + description + relative location`; the agent reads the SKILL.md/SKILL.toml on demand via `file_read`
+
+Compact saves tokens for agents with many skills installed.
+
+### Skill discovery
+
+The loader searches in this order (`src/skills/mod.rs`):
+
+1. **open-skills repo** — `~/open-skills/` (or `RANTAICLAW_OPEN_SKILLS_DIR`), only if open-skills is enabled
+2. **Profile-level skills** — `<workspace_dir>/../skills/`
+3. **Workspace-level skills** — `<workspace_dir>/skills/`
+
+On name collision, profile-level wins. **The paths `~/.local/share/rantaiclaw/skills/` and `/usr/local/share/rantaiclaw/skills/` are not searched** — those don't exist in this codebase.
+
+### Open-skills auto-sync
+
+If enabled, RantAIClaw auto-pulls from `besoeasy/open-skills` on GitHub every 7 days into `~/open-skills/`. This is a community skill repository — installing it gives every agent on the host a shared baseline set.
+
+```toml
+[skills]
+open_skills_enabled = true
+open_skills_url = "https://github.com/besoeasy/open-skills"
+```
+
+### The starter pack
+
+When you run `setup` for the first time, the wizard materializes a 5-skill **starter pack** into `<profile>/skills/` (`src/skills/bundled/mod.rs`). These are bundled with the binary and unpacked at setup time — they're not searched as built-ins.
+
+### SkillForge
+
+A separate auto-discovery pipeline (`src/skillforge/mod.rs`) periodically scouts GitHub and ClawHub for high-rated skills, evaluates them against your installed set, and proposes integrations.
+
+```toml
+[skills]
+skillforge_enabled = false
+skillforge_min_score = 0.7
+skillforge_scan_interval_hours = 24
+```
+
+Off by default. When on, it's an opinionated "your agent learns new tricks" loop.
+
+### CLI
+
+```bash
+rantaiclaw skills list                    # show installed skills
+rantaiclaw skills show <name>             # print a skill's metadata + prompt
+rantaiclaw skills install <git-url|path>  # add a skill from a git repo or local directory
+rantaiclaw skills remove <name>           # delete a skill directory
+```
+
+The CLI is `skills` (plural). There is no `uninstall`, no `publish`. Publishing to ClawHub is currently HTTP-driven, not CLI-driven.
+
+## Tools vs skills — when to write which
+
+- **Need a new low-level capability?** Write a tool in Rust.
+- **Need to combine existing tools into a task-shaped recipe?** Write a SKILL.toml (with shell or http tools) or a SKILL.md (prose-only, narrative skill).
+- **Want to share that recipe?** Push to ClawHub or include it in an open-skills-compatible repo.
+
+You'll write skills more often than tools. Tools are for capabilities every agent should have regardless of domain; skills are for opinionated domain workflows.
+
+## Reading the code
+
+- `src/tools/traits.rs` — `Tool` trait + `ToolResult`
+- `src/tools/mod.rs` — factories (`default_tools`, `all_tools_with_runtime`)
+- `src/tools/skill_tool.rs` — `SkillToolAdapter` (skill-defined tools as runtime tools)
+- `src/skills/mod.rs` — discovery, loading, prompt injection, CLI
+- `src/skills/bundled/mod.rs` — starter pack
+- `src/skills/clawhub.rs` — ClawHub installer
+- `src/skillforge/mod.rs` — auto-discovery pipeline

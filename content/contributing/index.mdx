@@ -1,0 +1,45 @@
+---
+title: Contributing
+description: How to contribute to RantAIClaw — PR flow, validation matrix, naming, and the documentation governance contract.
+---
+
+# Contributing
+
+RantAIClaw is open source under the Apache 2.0 license. Contributions follow a documented protocol described in detail in the rantaiclaw repo:
+
+- [`CONTRIBUTING.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/CONTRIBUTING.md) — the contribution guide
+- [`CLAUDE.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/CLAUDE.md) — engineering principles, validation matrix, anti-patterns
+- [`AGENTS.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/AGENTS.md) — short operational protocol for AI agents working on the codebase
+- [`docs/pr-workflow.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/pr-workflow.md) — PR flow
+- [`docs/reviewer-playbook.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/reviewer-playbook.md) — reviewer expectations
+- [`docs/release-process.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/release-process.md) — release process
+
+## High-level rules
+
+- One concern per PR. No mixed feature + refactor + infra patches.
+- Read before write. Inspect the relevant module, factory wiring, and adjacent tests before editing.
+- Validate by risk tier. Docs/chore changes are light; security / runtime / gateway / tools changes need risk notes and rollback plans.
+- Keep change reversible. Small scope, clear blast radius.
+- Privacy: never commit personal data, real names, real tokens, or private URLs in code, docs, tests, fixtures, or commit messages.
+
+## Validation matrix
+
+Default local checks for code changes:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+Preferred local pre-PR validation path:
+
+```bash
+./dev/ci.sh all
+```
+
+## Contributing to these docs
+
+The docs site (this repo, [RantAIClaw-Docs](https://github.com/RantAI-dev/RantAIClaw-Docs)) is separate from the rantaiclaw source. PRs that change behavior in rantaiclaw should typically come with a follow-up PR here.
+
+For now, content is hand-written MDX. The plan is to introduce generation scripts for the reference layer (CLI, config schema, tools registry) over time so reference content cannot drift from the code.

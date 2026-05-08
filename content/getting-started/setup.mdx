@@ -1,0 +1,69 @@
+---
+title: Setup Wizard
+description: Reference for the `rantaiclaw setup` interactive wizard.
+---
+
+# Setup Wizard
+
+`rantaiclaw setup` is the recommended way to configure an agent for the first time. It writes the active profile's `config.toml`, drops credentials into encrypted `enc2:` inline values, and provisions the `policy/`, `persona/`, and `skills/` directories under `~/.rantaiclaw/profiles/<active>/`.
+
+`rantaiclaw onboard` is an alias kept for backward compatibility with earlier releases.
+
+For a step-by-step walk-through, see [Your First Agent](/docs/getting-started/first-agent).
+
+## Re-running setup
+
+Setup is idempotent — re-running it lets you change providers, swap personas, add channels, refresh credentials, and add or modify MCP servers without losing existing data.
+
+```bash
+rantaiclaw setup
+```
+
+To configure a specific subsystem only:
+
+```bash
+rantaiclaw setup mcp        # MCP servers picker (with OAuth where needed)
+rantaiclaw setup hardware   # hardware peripherals
+```
+
+## Non-interactive setup
+
+For automation (CI, Docker entrypoints), pass `--non-interactive` and provide values via env vars or flags:
+
+```bash
+RANTAICLAW_PROVIDER=openrouter \
+RANTAICLAW_API_KEY=$OPENROUTER_KEY \
+RANTAICLAW_MODEL=anthropic/claude-sonnet-4.6 \
+rantaiclaw setup --non-interactive
+```
+
+Recognized env vars consumed by the non-interactive path:
+
+| Env var | Effect |
+|---|---|
+| `RANTAICLAW_PROVIDER` | Default provider |
+| `RANTAICLAW_API_KEY` | Provider API key |
+| `RANTAICLAW_MODEL` | Default model name |
+| `RANTAICLAW_PROFILE` | Profile to provision (defaults to `default`) |
+| `RANTAICLAW_CONFIG_DIR` | Override config directory |
+| `RANTAICLAW_WORKSPACE` | Override workspace directory |
+
+Note: env vars like `RANTAICLAW_AUTONOMY` and `RANTAICLAW_CHANNELS` are **not** recognized today — channel and autonomy choices are interactive-only or driven by the config file you preload. For full automation, drop a pre-built `config.toml` into the profile directory before invoking the daemon.
+
+## Selecting a profile
+
+To set up a specific profile (instead of `default`):
+
+```bash
+rantaiclaw --profile work setup
+```
+
+Or via env:
+
+```bash
+RANTAICLAW_PROFILE=work rantaiclaw setup
+```
+
+See [Profiles](/docs/concepts/profiles) for the full profile model.
+
+> **Status note:** the CLI surface is alpha. Flag names and env var names may change before 1.0. Pin to a known release for production use.

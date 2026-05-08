@@ -1,0 +1,67 @@
+---
+title: RantAIClaw
+description: Production-grade multi-agent runtime written in Rust. Powers autonomous AI employees across Discord, Slack, Telegram, WhatsApp, and more from a single binary.
+---
+
+# RantAIClaw
+
+**Production multi-agent runtime in 100% Rust.** Powers autonomous AI employees that communicate across channels, execute tools, manage memory, and run skills — all from a single binary.
+
+RantAIClaw is designed for the boring real-world constraints production agents actually hit: cold start under 200ms, idle memory around 15MB, deterministic concurrency, secure-by-default tool execution, and per-profile isolation for multi-tenant deployments.
+
+## Why this exists
+
+Most agent frameworks were written in Python or TypeScript and inherit the runtime they were built on — cold starts measured in seconds, GC pauses, fragile concurrency, dependency sprawl. Those tradeoffs are fine for notebooks. They are not fine for an agent that needs to stay connected to thousands of channels for months at a time, run inside a container with a 256MB limit, and execute tools that touch real systems.
+
+RantAIClaw rewrites the runtime from the bottom up in Rust:
+
+| Metric | RantAIClaw | Typical Python alternative |
+|---|---|---|
+| Cold start | < 200ms | 2–5s |
+| Idle memory | ~15 MB | 200–500 MB |
+| Binary size | ~12 MB | (interpreter + deps) |
+| Concurrent channels | Thousands | Hundreds |
+
+No garbage collector. No runtime overhead. Just async Rust on `tokio`.
+
+## What it does
+
+- **Multi-channel.** Connect one agent to Discord, Slack, Telegram, WhatsApp (Cloud or Web), Matrix (E2EE), Mattermost, Signal, Email, IRC, DingTalk, Lark, iMessage, Linq, QQ, Nextcloud Talk, and CLI — simultaneously, each with its own independent lifecycle.
+- **Multi-provider.** Route to OpenRouter, OpenAI, Anthropic, Gemini, Copilot — plus 25+ OpenAI-compatible and regional providers (Groq, Mistral, xAI, DeepSeek, Together, Fireworks, Perplexity, Cohere, Moonshot, GLM, Qwen, MiniMax, Baidu, Doubao, ZAI). Default model is `anthropic/claude-sonnet-4.6`.
+- **Resilient provider wrapper.** Retries with exponential backoff, multi-provider fallback, per-model fallback chains, API-key rotation on 429, `Retry-After` parsing.
+- **Per-profile workspaces.** Everything an agent owns lives under `~/.rantaiclaw/profiles/<name>/`. Run multiple agents on one host without cross-contamination.
+- **ClawHub + open-skills.** Install community skills from [ClawHub](https://clawhub.ai), or auto-sync the open-skills repo (`besoeasy/open-skills`) every 7 days for a shared baseline.
+- **MCP supervision.** Spawn and restart Model Context Protocol servers as supervised child processes (runtime tool integration is in-progress — see [MCP Servers](/docs/concepts/mcp)).
+- **Agentic tools.** 20+ built-in tools (`shell`, `file_read`, `file_write`, `glob_search`, `cron_*`, `memory_*`, `web_search_tool`, `git_operations`, `pdf_read`, `screenshot`, `image_info`, etc.) with security boundaries.
+- **Three-level autonomy + four onboarding presets.** Runtime states `read_only` / `supervised` / `full`, configured via L1–L4 preset bundles that write `autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` to disk.
+- **Five memory backends.** SQLite (default), Lucid (sqlite + workspace markdown overlay — RantAIClaw-only), Markdown, PostgreSQL, none. Hybrid lexical + vector recall, soul-snapshot for cold-boot survival.
+- **Sandbox auto-detection.** Landlock (Linux) → Firejail → Bubblewrap → Docker → Noop, picked at runtime based on what the host supports.
+- **AEAD secret store.** ChaCha20-Poly1305, master key at `~/.rantaiclaw/.secret_key`, ciphertext stored inline in `config.toml` as `enc2:<hex>`.
+
+## Where to start
+
+| If you want to... | Read |
+|---|---|
+| Install and run your first agent | [Getting Started](/docs/getting-started) |
+| Understand how the runtime is built | [Concepts → Architecture](/docs/concepts/architecture) |
+| Understand the per-profile workspace layout | [Concepts → Profiles](/docs/concepts/profiles) |
+| See how a single message flows through the system | [Concepts → Agent Loop](/docs/concepts/agent-loop) |
+| Decide how much autonomy to grant your agent | [Concepts → Autonomy Levels](/docs/concepts/autonomy-levels) |
+| Look up a CLI command, config field, or channel | [Reference](/docs/reference) |
+
+## Project status
+
+RantAIClaw is **alpha** (current `0.6.x` series). Core subsystems — runtime, channels, providers, tools, gateway pairing, audit log, sandbox detection — are stable. Some areas are partially-built and clearly flagged in their respective docs:
+
+- **Live config (`PATCH /config/*`)** — handlers exist in `src/gateway/config_api.rs` but are not currently mounted on the running router.
+- **MCP runtime tool integration** — supervisor manages MCP processes; agent loop does not yet consume their tools.
+- **Approval timeouts** — `timeout_secs` is written to policy files but no consumer reads it; CLI prompts block indefinitely.
+
+Where the docs make a claim about behavior, the file path / function citation is in the page so you can verify against the source.
+
+## Source and license
+
+- **Source:** [github.com/RantAI-dev/RantAIClaw](https://github.com/RantAI-dev/RantAIClaw)
+- **License:** Apache 2.0
+- **Skills marketplace:** [clawhub.ai](https://clawhub.ai)
+- **Open skills repo:** [github.com/besoeasy/open-skills](https://github.com/besoeasy/open-skills)

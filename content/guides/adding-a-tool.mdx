@@ -1,0 +1,29 @@
+---
+title: Adding a Tool
+description: Implement the `Tool` trait with a strict parameter schema and structured results.
+---
+
+# Adding a Tool
+
+> **v1 status:** stub. Step-by-step walkthrough TBD. In the meantime, see `examples/custom_tool.rs` in the [rantaiclaw repo](https://github.com/RantAI-dev/RantAIClaw/blob/main/examples/custom_tool.rs) and read [Concepts → Tools & Skills](/docs/concepts/tools-and-skills).
+
+## The shape
+
+1. Create `src/tools/<your_tool>.rs` and implement the `Tool` trait
+2. Define a strict JSON Schema for parameters — what the LLM is told is what the runtime validates
+3. Return `ToolResult`, never panic
+4. Register in `src/tools/mod.rs`
+5. Add tests for success, validation failure, and security-denied paths
+
+## Anti-patterns to avoid
+
+- Tools that wrap arbitrary shell commands. Use the existing `shell` tool with an allowlist; do not write a new "shell-with-extra-flags" tool.
+- Tools that bypass the [approval gate](/docs/concepts/autonomy-levels). The gate runs before `execute`; you do not opt out.
+- Tools that mutate gateway / security policy directly. That is an architecture boundary violation; the policy lives in `src/security/` for a reason.
+
+## Reference implementations
+
+- `src/tools/file_read.rs` — minimal read-only tool
+- `src/tools/shell.rs` — shell with sandbox + allowlist
+- `src/tools/web_search.rs` — outbound HTTP with structured result
+- `src/tools/memory_recall.rs` — semantic search over memory

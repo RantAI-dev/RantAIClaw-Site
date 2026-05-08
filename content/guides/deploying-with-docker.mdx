@@ -1,0 +1,35 @@
+---
+title: Deploying with Docker
+description: Container layout, environment variables, persistent volumes, and health checks for production deployments.
+---
+
+# Deploying with Docker
+
+> **v1 status:** stub. Full Dockerfile walkthrough TBD. The rantaiclaw repo ships a [`Dockerfile`](https://github.com/RantAI-dev/RantAIClaw/blob/main/Dockerfile) and [`docker-compose.yml`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docker-compose.yml) you can use directly.
+
+## Volumes you should mount
+
+| Host path | Container path | Why |
+|---|---|---|
+| `./config/` | `/etc/rantaiclaw/` | Static config (`config.toml`, persona files) |
+| `./data/` | `/var/lib/rantaiclaw/` | Memory DB, secret store, audit log |
+| `./skills/` | `/usr/local/share/rantaiclaw/skills/` | Installed skills (read-only is fine) |
+
+## Health check
+
+```yaml
+healthcheck:
+  test: ["CMD", "rantaiclaw", "doctor"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+```
+
+`rantaiclaw doctor` exits non-zero on any failed check, making it a clean Docker `HEALTHCHECK` target.
+
+## Common pitfalls
+
+- **Empty channel allowlist.** Channels with no allowlist are silently offline. Fail fast by failing CI when `rantaiclaw doctor` reports `[WARN]` on an enabled channel.
+- **Missing `allow_public_bind`.** If you set `bind = "0.0.0.0"` in `[gateway]`, you must also set `allow_public_bind = true`. The agent refuses to start otherwise.
+- **Sandbox feature mismatch.** Building with `sandbox-landlock` and running on a kernel < 5.13 means the runtime falls back to allowlist-only enforcement and logs a warning. Pin your base image to a kernel that supports your sandbox features.

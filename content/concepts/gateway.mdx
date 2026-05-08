@@ -1,0 +1,182 @@
+---
+title: Gateway & Live Config
+description: The HTTP control plane — pairing, webhooks, triggers, and a `/api/v1/*` read surface. Live config is partly built but not currently wired.
+---
+
+# Gateway & Live Config
+
+The gateway is RantAIClaw's HTTP control plane. It runs alongside the agent — typically inside the `daemon` process — on a configurable port (default `3000`, default bind `127.0.0.1`).
+
+This page describes **what's actually wired into the running router today**, what the auth model looks like, and which planned features exist as code but aren't reachable yet.
+
+## What the gateway is for
+
+- **Pairing and bearer auth** — issue tokens to clients (the agent-runner, scripts, external orchestrators)
+- **Webhook ingress** — receive HTTP webhooks as agent inputs
+- **Channel-specific webhook endpoints** — WhatsApp Cloud, Linq, Nextcloud Talk
+- **Trigger ingress** — `/triggers/{*path}` routes inbound HTTP into skills/messages defined in `webhook-routes.json`
+- **Read-only `/api/v1/*` surface** — sessions, skills, memory, channels, providers, status, doctor
+- **Health and metrics** — `/health`, `/metrics` (Prometheus text)
+
+There is also an implementation of live-config `PATCH /config/*` endpoints in `src/gateway/config_api.rs` — but it is **not currently mounted on the router** (see [Live config — planned, not wired](#live-config--planned-not-wired) below).
+
+## Bind safety
+
+Defaults to `127.0.0.1` (loopback only). To bind a non-loopback host, you must opt in:
+
+```toml
+[gateway]
+host = "0.0.0.0"
+port = 3000
+allow_public_bind = true
+```
+
+Without `allow_public_bind = true`, the gateway refuses to start with a non-loopback bind. The check is in `src/gateway/mod.rs`:
+
+```
+🛑 Refusing to bind to 0.0.0.0 — set [gateway].allow_public_bind = true
+```
+
+**Tunnel exception:** if `[tunnel].provider != "none"` (e.g. cloudflared, ngrok), the public-bind guard is bypassed because the tunnel is expected to terminate TLS and gate access. Document this clearly in your deployment if you rely on it.
+
+The env var `RANTAICLAW_ALLOW_PUBLIC_BIND=1` works as an alternative to the config flag.
+
+## Pairing and bearer tokens
+
+There is **no `rantaiclaw gateway pair` CLI subcommand**. The `gateway` command is a leaf with `--port` and `--host` only.
+
+Pairing is HTTP-driven:
+
+1. Start the gateway. A 6-digit pairing code is printed to stdout (CSPRNG-generated, rejection-sampled to avoid modulo bias).
+2. Client submits the code via `POST /pair` with header `X-Pairing-Code: <code>`.
+3. Server returns a 256-bit token (64 hex chars) once.
+4. Server stores **only the SHA-256 hash** of the token in `[gateway].paired_tokens` in `config.toml`. The plaintext is never persisted.
+
+```bash
+PAIR_CODE=123456
+curl -X POST http://localhost:3000/pair \
+  -H "X-Pairing-Code: $PAIR_CODE"
+# → { "token": "abcd...", "issued_at": "..." }
+```
+
+Subsequent requests use `Authorization: Bearer <token>`. **Auth is flat — there are no scopes.** A valid token has full access to authenticated routes.
+
+Tokens cannot be recovered if lost; pair again to issue a new one.
+
+## Real HTTP endpoint surface
+
+Routes mounted in `src/gateway/mod.rs` plus the `api_v1` router merged on top:
+
+| Method | Path | Auth |
+|---|---|---|
+| GET | `/health` | none |
+| GET | `/metrics` | none (Prometheus text) |
+| POST | `/pair` | one-time `X-Pairing-Code` header |
+| POST | `/webhook` | bearer + optional `X-Webhook-Secret` |
+| GET / POST | `/whatsapp` | Meta verify-token (GET) / HMAC `X-Hub-Signature-256` (POST, when `app_secret` set) |
+| POST | `/linq` | HMAC signing-secret (when set) |
+| POST | `/nextcloud-talk` | HMAC (when `webhook_secret` set) |
+| POST | `/triggers/{*path}` | bearer |
+| GET / POST | `/tasks` | bearer |
+| GET / PUT / DELETE | `/tasks/{id}` | bearer |
+| POST | `/tasks/{id}/review` | bearer |
+| GET / POST | `/tasks/{id}/comments` | bearer |
+| GET | `/tasks/{id}/events` | bearer |
+| GET | `/api/v1/version` | none |
+| GET | `/api/v1/status` | bearer |
+| GET | `/api/v1/doctor` | bearer |
+| POST | `/api/v1/agent/chat` | bearer |
+| GET | `/api/v1/sessions` | bearer |
+| POST | `/api/v1/sessions/search` | bearer |
+| GET | `/api/v1/sessions/{id}` | bearer |
+| PUT | `/api/v1/sessions/{id}/title` | bearer |
+| GET | `/api/v1/insights` | bearer |
+| GET | `/api/v1/skills` | bearer |
+| GET | `/api/v1/skills/{name}` | bearer |
+| GET | `/api/v1/memory` | bearer |
+| GET | `/api/v1/memory/stats` | bearer |
+| GET / PUT | `/api/v1/personality` | bearer |
+| GET | `/api/v1/channels` | bearer |
+| GET | `/api/v1/providers` | none |
+
+There is **no** `/config/*` route, **no** `/mcp/servers` route, and **no** `rantaiclaw gateway` subcommand for pairing.
+
+## Webhook authentication — three flavors
+
+Different endpoints use different verification strategies:
+
+### `/webhook` (generic prompt entry)
+
+- Bearer token required (when `[gateway].require_pairing = true`)
+- Optional `X-Webhook-Secret` header — server SHA-256-hashes the value and compares against the configured hashed secret with `constant_time_eq`
+- This is a **shared-secret check, not an HMAC over the request body**
+
+### Channel-specific endpoints (HMAC over body)
+
+- **`POST /whatsapp`** — `X-Hub-Signature-256: sha256=<hex>` HMAC-SHA256 over the raw body, verified with `mac.verify_slice` (constant-time)
+- **`POST /linq`** — channel-specific signing secret, HMAC-SHA256
+- **`POST /nextcloud-talk`** — `X-Nextcloud-Talk-Random` + `X-Nextcloud-Talk-Signature` headers, HMAC-SHA256
+
+These header names are **hard-coded per channel**, not user-configurable. Missing or invalid signatures return 401 with a JSON body `{"error": "..."}`.
+
+### Trigger routes — `/triggers/{*path}`
+
+The trigger route is fed by `<config_dir>/webhook-routes.json` (typically written by an agent-runner or external orchestrator), not by config TOML. Schema:
+
+```json
+[
+  { "path": "/deploys", "skill": "deploy-checker", "message": "{repo} deployed: status={status}" },
+  { "path": "/incidents", "skill": "incident-triage", "message": "Alert: {title}" }
+]
+```
+
+There is no HMAC, no template engine — just literal placeholders that get formatted from query params. Auth is bearer-only.
+
+## Rate limits and idempotency
+
+Per-client-IP sliding-window rate limits:
+
+- `/pair` — 10/min
+- `/webhook`, `/triggers/*` — 60/min
+
+Idempotency: `X-Idempotency-Key` header on `/webhook` deduplicates retries within the configured TTL (default 300s).
+
+## Live config — planned, not wired
+
+The repository contains `src/gateway/config_api.rs` with handlers for:
+
+- `GET /config`
+- `GET /config/channels`
+- `GET /config/mcp-servers`
+- `PATCH /config/channels` — add/remove channels via `{"<name>": {...}}` or `{"<name>": null}`
+- `PATCH /config/mcp-servers` — start MCP servers
+- `PATCH /config/model` — hot-swap the active model
+- `PATCH /config/tools`
+- `PATCH /config/agent`
+
+These handlers also call `src/config/runtime.rs::write_runtime_section`, which writes to `config.runtime.toml` for persistence across restarts.
+
+**However, as of the current revision, none of these routes are mounted on the running router.** The module isn't declared in `src/gateway/mod.rs`, and the handlers reference `AppState` fields (`channel_registry`, `mcp_registry`, `config_tx`) that don't exist on the actual `AppState` shape. The code compiles in isolation but is unreachable at runtime.
+
+If you've seen earlier docs (or older blog posts) describing live `PATCH /config/*` calls, they describe an intended feature that hasn't shipped. The infrastructure exists — pairing, persistence, the runtime config file — but the wiring is incomplete.
+
+For now, configuration changes require restarting the agent (or the daemon's component supervisor will restart the relevant subsystem on its own backoff loop after a process exit).
+
+## What the daemon does with the gateway
+
+When you run `rantaiclaw daemon`, the supervisor starts:
+
+- the gateway HTTP server on the configured port
+- each enabled channel's listen task
+- the heartbeat / scheduler / cron loops
+
+Each component is supervised with exponential backoff restart on crash, so a misbehaving channel won't take down the gateway and vice versa.
+
+## Reading the code
+
+- `src/gateway/mod.rs` — server bootstrap, route registration, handlers for `/health`, `/metrics`, `/pair`, `/webhook`, channel webhooks, triggers
+- `src/gateway/api_v1.rs` — the `/api/v1/*` router and bearer-auth middleware
+- `src/gateway/task_handlers.rs` — `/tasks/*` handlers
+- `src/gateway/config_api.rs` — **not mounted today**; planned live-config surface
+- `src/security/pairing.rs` — pair flow, token generation, hash storage, constant-time compare
+- `src/config/runtime.rs` — `write_runtime_section` and `load_with_runtime_overrides` (the latter not yet called from production)

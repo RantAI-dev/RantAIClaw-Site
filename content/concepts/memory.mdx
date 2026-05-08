@@ -1,0 +1,190 @@
+---
+title: Memory
+description: Five memory backends, hybrid lexical+vector recall, and per-session scoping. Plus the snapshot/hydration "soul" backup that restores Core memories after a cold boot.
+---
+
+# Memory
+
+An agent without memory forgets every conversation when it starts a new one. RantAIClaw's memory system gives agents three things: short-term conversation history, durable facts, and hybrid (lexical + vector) recall.
+
+There are **five backends**, each with a different sweet spot:
+
+| Backend | Best for | Tradeoff |
+|---|---|---|
+| **`sqlite`** (default) | Single-agent, single-host | Zero-config; not shared |
+| **`lucid`** | Same as SQLite, but with a human-readable workspace markdown view layered on top | Slight write overhead for the markdown sync |
+| **`markdown`** | Memory you want to grep / version-control / hand-edit | Slower at scale; lexical search only |
+| **`postgres`** | Multi-agent fleets, shared memory pool | Requires DB; needs `--features memory-postgres` |
+| **`none`** | Explicit no-op (testing, ephemeral runs) | No persistence at all |
+
+Set the backend in `[memory] backend = "..."`. Unknown backend names fall back to `markdown` with a warning.
+
+## What memory stores
+
+Every record carries a `MemoryCategory`:
+
+| Category | What goes here |
+|---|---|
+| `Core` | Durable facts about the user, the agent's identity, persistent preferences. Backed up to `MEMORY_SNAPSHOT.md` for soul-hydration. |
+| `Daily` | Daily summaries; archived after `archive_after_days` (default 7) and purged after `purge_after_days` (default 30) |
+| `Conversation` | Conversation turns; pruned by `conversation_retention_days` (default 30) |
+| `Custom("name")` | Arbitrary application-defined buckets |
+
+Records have: `id, key, content, category, timestamp, session_id, score`. Optional scoping is via `session_id: Option<&str>` — `None` is global. **There is no "sender identity" or "namespace" primitive** beyond session IDs and categories.
+
+## The Memory trait
+
+```rust
+// src/memory/traits.rs (simplified)
+#[async_trait]
+pub trait Memory: Send + Sync {
+    fn name(&self) -> &str;
+    async fn store(&self, key: &str, content: &str, category: MemoryCategory, session_id: Option<&str>) -> Result<()>;
+    async fn recall(&self, query: &str, limit: usize, session_id: Option<&str>) -> Result<Vec<MemoryEntry>>;
+    async fn get(&self, key: &str) -> Result<Option<MemoryEntry>>;
+    async fn list(&self, category: Option<&MemoryCategory>, session_id: Option<&str>) -> Result<Vec<MemoryEntry>>;
+    async fn forget(&self, key: &str) -> Result<bool>;
+    async fn count(&self) -> Result<usize>;
+    async fn health_check(&self) -> bool;
+}
+```
+
+## Hybrid recall — BM25 + cosine
+
+Recall is **not pure cosine similarity**. The SQLite and Lucid backends combine:
+
+- **FTS5 BM25** — full-text lexical match
+- **Cosine similarity** over stored embeddings
+
+Then merges with weights:
+
+| Weight | Default |
+|---|---|
+| `vector_weight` | `0.7` |
+| `keyword_weight` | `0.3` |
+
+The merged top-K is what gets fed to the agent. The threshold filter (`min_relevance_score`, default `0.4`) is applied **at the agent loop layer** (`src/agent/memory_loader.rs`), not inside the backend.
+
+For Markdown and Postgres backends, the recall path differs (no FTS5 — vector-only or keyword-only depending on configuration), but the same `min_relevance_score` filter applies.
+
+## Embedding provider
+
+Defaults that may surprise you:
+
+```toml
+[memory]
+backend = "sqlite"
+conversation_retention_days = 30
+min_relevance_score = 0.4
+vector_weight = 0.7
+keyword_weight = 0.3
+
+[memory.embedding]
+provider = "none"                       # ← NoopEmbedding by default!
+model = "text-embedding-3-small"
+dimensions = 1536
+```
+
+**The default embedding provider is `none`** (NoopEmbedding) — meaning until you configure a real embedding provider, recall is effectively lexical-only. Set `[memory.embedding].provider` to `openai`, `voyage`, etc., and supply credentials to enable real semantic recall.
+
+You can also declare alternative routes per memory model name:
+
+```toml
+[[embedding_routes]]
+hint = "core-"
+provider = "openai"
+model = "text-embedding-3-large"
+```
+
+## Snapshot and hydration ("soul" backup)
+
+Core memories — durable user-identity facts — can be exported to a single human-readable markdown file:
+
+```toml
+[memory]
+snapshot_enabled = true
+auto_hydrate = true
+```
+
+When enabled, the agent periodically writes Core entries to `<workspace>/memory/MEMORY_SNAPSHOT.md`. On cold boot, if `brain.db` is missing but the snapshot exists, the agent re-hydrates Core memories from the markdown.
+
+This is RantAIClaw-specific — it's how an agent's "soul" survives a cold boot, OS reinstall, or container redeployment that wipes the SQLite file.
+
+Defaults: `snapshot_enabled = false`, `auto_hydrate = true`.
+
+## Hygiene job
+
+A background hygiene loop runs every 12 hours (`src/memory/hygiene.rs`):
+
+- Prunes `Conversation` rows older than `conversation_retention_days`
+- Archives `Daily` entries older than `archive_after_days` to a `daily/archive/` folder (markdown backend) or a status flag (sqlite)
+- Purges archived `Daily` entries older than `purge_after_days`
+
+Pruning is automatic. There's no `rantaiclaw memory prune` command.
+
+## CLI
+
+```bash
+rantaiclaw memory list [--category core|daily|conversation|<custom>] [--session <id>] [--limit N] [--offset N]
+rantaiclaw memory get <key>
+rantaiclaw memory stats
+rantaiclaw memory clear [--category <c>] [--session <id>]
+```
+
+That's the full surface. There is no `prune`, `show`, or `forget` CLI subcommand — `forget` is a trait method but not exposed via CLI.
+
+## Lucid backend
+
+Unique to RantaiClaw. Layers a workspace markdown view on top of SQLite — every memory write produces both a `brain.db` row and a markdown file under `<workspace>/memory/<category>/<date>/<key>.md`.
+
+The markdown view is for humans (grep, edit, version control). The SQLite view is for the runtime (fast queries, embeddings). They stay in sync automatically.
+
+## Postgres backend
+
+Requires building with `--features memory-postgres`.
+
+```toml
+[memory]
+backend = "postgres"
+
+[storage.provider]
+config = { db_url = "${DATABASE_URL}", schema = "rantaiclaw" }
+```
+
+Multi-agent shared state, real concurrency, native `pgvector` index. Standard Postgres backup tooling applies.
+
+## Default paths
+
+Per-profile under `~/.rantaiclaw/profiles/<active>/`:
+
+| Backend | Path |
+|---|---|
+| `sqlite` / `lucid` | `<profile>/workspace/memory/brain.db` |
+| `markdown` | `<profile>/workspace/memory/<category>/...` |
+| `postgres` | configured via `db_url` |
+
+## Response cache (separate)
+
+Adjacent to memory but distinct: `[memory.response_cache]` is an LRU cache of LLM responses keyed by prompt hash.
+
+```toml
+[memory.response_cache]
+enabled = false      # default
+ttl_seconds = 3600
+max_entries = 5000
+```
+
+When enabled, repeated identical prompts skip the provider and return cached answers within the TTL window. Useful for deterministic workloads; a footgun for anything personalized.
+
+## Reading the code
+
+- `src/memory/traits.rs` — `Memory` trait + `MemoryCategory` + `MemoryEntry`
+- `src/memory/sqlite.rs` — SQLite + FTS5 + embedding storage
+- `src/memory/lucid.rs` — markdown overlay
+- `src/memory/markdown.rs` — pure markdown backend
+- `src/memory/postgres.rs` — Postgres backend (feature-gated)
+- `src/memory/none.rs` — explicit no-op
+- `src/memory/hygiene.rs` — retention pruner (12h loop)
+- `src/memory/snapshot.rs` — soul backup / hydration
+- `src/memory/response_cache.rs` — LRU response cache
+- `src/agent/memory_loader.rs` — agent-side recall + `min_relevance_score` filter

@@ -1,0 +1,201 @@
+---
+title: Security Model
+description: Deny-by-default boundaries — sandbox auto-detection, allowlists, AEAD secrets, audit logging, channel-specific webhook auth.
+---
+
+# Security Model
+
+RantAIClaw runs autonomous agents that touch real systems. The security model is built around a small number of enforced rules:
+
+- **Deny by default.** Most channels with empty allowlists are offline. Gateway with a public bind without `allow_public_bind` does not start. Forbidden paths are unconditional.
+- **Least privilege.** Sandboxes detect and apply automatically per platform. The narrowest available sandbox runs.
+- **Explicit approval.** Tool calls go through the approval gate. Tools not in `auto_approve` are denied or prompted.
+- **Auditable.** Every approval decision and tool execution lands in an append-only JSONL log.
+
+This page maps those rules to the code that enforces them. Where I make a claim about behavior, the file path is at the bottom of each section.
+
+## Threat model
+
+RantAIClaw assumes a hostile network and a moderately-trusted operator. The hostile network can attempt to forge channel webhooks, replay requests, brute-force gateway tokens, or exfiltrate via misconfigured allowlists. The operator is trusted to set initial config but not to remember every constraint — so the runtime enforces hard boundaries the operator cannot accidentally weaken without an explicit, visible config flag.
+
+What is **not** in the threat model: a malicious operator with shell access. If you give an agent root, the agent has root.
+
+## The approval gate
+
+Every tool call passes through `src/approval/mod.rs`. The gate combines:
+
+- the runtime `[autonomy].level` (`read_only` / `supervised` / `full`)
+- the `auto_approve` and `always_ask` lists
+- forbidden paths and `block_high_risk_commands` (default `true`) — non-negotiable
+- for `shell`, the patterns in `<profile>/policy/command_allowlist.toml`
+
+See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full model.
+
+## Sandbox auto-detection
+
+Sandbox selection is **automatic** based on what the host supports (`src/security/detect.rs`). Priority order:
+
+1. **Landlock** (Linux ≥ 5.13) — preferred when available. Compiled in unconditionally on Linux.
+2. **Firejail** — used if installed.
+3. **Bubblewrap** — feature-gated (`sandbox-bubblewrap`); on macOS this is the only sandbox path.
+4. **Docker** — cross-platform fallback.
+5. **NoopSandbox** — last resort.
+
+Notes:
+
+- Landlock requires no Cargo feature flag — it's compiled in via `[target.'cfg(target_os = "linux")'.dependencies] landlock = "0.4"`. The historical `sandbox-landlock` flag is now a no-op kept for backward compatibility.
+- Bubblewrap requires `--features sandbox-bubblewrap` at build time.
+- Windows has no sandbox path — falls through to `NoopSandbox`.
+- macOS has no native Apple sandbox path — only Bubblewrap (feature) and Docker.
+
+To disable sandboxing entirely:
+
+```toml
+[security.sandbox]
+enabled = false
+# or
+backend = "none"
+```
+
+There is **no** `RANTAICLAW_ALLOW_UNSANDBOXED` env var. (The env var `RANTAICLAW_ALLOW_PUBLIC_BIND=1` exists, but for gateway bind, not sandbox bypass.)
+
+## Allowlists, not blocklists
+
+For things the agent decides to talk to (channels, networks, commands), the runtime asks for **allowlists** rather than blocklists:
+
+- **Channels.** Most channels treat empty allowlist as offline. The exception is `email_channel` / `linq`, which allow-all on empty `allowed_senders`. See [Channels & Providers](/docs/concepts/channels-and-providers) for per-channel allowlist key names.
+- **Commands.** The `command_allowlist.toml` patterns are quote-aware globs over the command string. Defense-in-depth shell parsing strips subshells, redirects, env-prefixes, etc., before matching.
+- **Forbidden paths.** Default forbidden_paths includes `/home`, `/tmp`, `/var`, `~/.config`, `~/.aws`. Combined with `workspace_only = true` (default), this confines file tools to `workspace_dir`.
+
+`block_high_risk_commands` (default `true`) sits on top: even under `[autonomy].level = "full"`, commands like `rm`, `sudo`, `curl`, `wget`, `ssh`, `chmod`, `mkfs`, `iptables`, `mount` are denied unless that flag is explicitly cleared.
+
+## The secret store
+
+API keys, channel tokens, OAuth refresh credentials, and webhook secrets are encrypted with **ChaCha20-Poly1305 AEAD**.
+
+The encryption key lives at:
+
+```
+~/.rantaiclaw/.secret_key       (mode 0600 on Unix)
+```
+
+Generated on first encrypt via `OsRng`. There is no separate `secrets.enc` blob file — encrypted ciphertext is stored **inline in `config.toml`** as `enc2:<hex(nonce ‖ ct ‖ tag)>` strings. Reading the config decrypts these; writing re-encrypts.
+
+Legacy `enc:<...>` XOR-cipher values from earlier versions are auto-migrated to `enc2:` on first read.
+
+If you set `[secrets].encrypt = false` (the "sovereign user" toggle), values are stored plaintext — useful for short-lived ephemeral runs, dangerous in production.
+
+OAuth tokens for MCP integrations live separately at:
+
+```
+~/.rantaiclaw/profiles/<active>/secrets/api_keys.toml   (mode 0600)
+```
+
+This is a plain TOML file, not the AEAD store. It's written by the OAuth flow during interactive setup.
+
+## Webhook authentication — three flavors
+
+Different gateway endpoints use different verification:
+
+- **`POST /webhook` (generic prompt entry)** — bearer token + optional `X-Webhook-Secret` header (server SHA-256-hashes the value, compares with `constant_time_eq`). This is a shared-secret check, not an HMAC over the body.
+- **Channel-specific endpoints — body HMAC:**
+  - `POST /whatsapp` — `X-Hub-Signature-256: sha256=<hex>`, HMAC-SHA256 over body, verified with `mac.verify_slice` (constant-time)
+  - `POST /linq` — channel signing-secret, HMAC-SHA256
+  - `POST /nextcloud-talk` — `X-Nextcloud-Talk-Random` + `X-Nextcloud-Talk-Signature` headers
+- **`POST /triggers/{*path}` (skill triggers)** — bearer token only; no HMAC
+
+The header names for HMAC endpoints are **hard-coded per channel**, not user-configurable. Missing or invalid signatures return 401 with a JSON body `{"error": "..."}`.
+
+See [Gateway](/docs/concepts/gateway) for the full endpoint table.
+
+## Pairing tokens
+
+Bearer tokens are 256-bit (64 hex chars), generated by `POST /pair` after submitting a one-time 6-digit pairing code printed at gateway startup. Tokens are **stored as SHA-256 hashes** in `[gateway].paired_tokens` in `config.toml` — only the hash, never the plaintext. Plaintext is returned exactly once from `/pair`.
+
+There are no token scopes — auth is flat. Pair again to issue a new token.
+
+## Bind safety
+
+Gateway defaults to `127.0.0.1`. Public bind (`0.0.0.0` or any non-loopback host) requires `allow_public_bind = true`:
+
+```toml
+[gateway]
+host = "0.0.0.0"
+port = 3000
+allow_public_bind = true
+```
+
+Without that, the gateway refuses to start. Exception: if `[tunnel].provider != "none"` (cloudflared, ngrok configured), the public-bind guard is bypassed because the tunnel is expected to gate access.
+
+The env var `RANTAICLAW_ALLOW_PUBLIC_BIND=1` works as an alternative to the config flag.
+
+## Rate limits and idempotency
+
+Sliding-window per-client-IP rate limits:
+
+| Endpoint | Default |
+|---|---|
+| `POST /pair` | 10/min |
+| `POST /webhook`, `POST /triggers/*` | 60/min |
+
+Idempotency: `X-Idempotency-Key` on `/webhook` deduplicates retries within `dedupe_ttl_seconds` (default 300).
+
+## Audit log
+
+Path: `<profile>/audit.log` — one JSON object per line, append-only.
+
+Schema (`AuditEvent` in `src/security/audit.rs`):
+
+```json
+{
+  "timestamp": "2026-05-08T13:42:11.337Z",
+  "event_id": "<uuid-v4>",
+  "event_type": "command_execution",
+  "actor": { "channel": "cli", "user_id": "...", "username": "..." },
+  "action": { "command": "cargo test --lib", "risk_level": "low", "approved": true, "allowed": true },
+  "result": { "success": true, "exit_code": 0, "duration_ms": 4421, "error": null },
+  "security": { "policy_violation": false, "rate_limit_remaining": 19, "sandbox_backend": "landlock" }
+}
+```
+
+`event_type` enum: `command_execution`, `file_access`, `config_change`, `auth_success`, `auth_failure`, `policy_violation`, `security_event`.
+
+Rotation: when the file reaches `max_size_mb` (default 100), it rotates `audit.log` → `audit.log.1.log` → `.2.log`, up to `.10.log`.
+
+> **Two caveats:** the audit serializer does not currently apply secret redaction to the `command` field (the `redact()` helper exists but is not wired into audit serialization). HMAC signing of audit events is also not implemented (the `sign_events` config flag is unused). Don't rely on the audit log being secret-safe or tamper-evident yet.
+
+## Resource limits
+
+```toml
+[security.resources]
+max_memory_mb = 512
+max_cpu_time_seconds = 60
+max_subprocesses = 10
+memory_monitoring = true
+```
+
+These limit shell-spawned subprocesses, not the agent's own process.
+
+## What is *not* relaxed by autonomy
+
+Some boundaries are unconditional. No autonomy level / preset relaxes them:
+
+- forbidden paths
+- `block_high_risk_commands` (when `true`)
+- TLS verification on outbound calls
+- gateway's `allow_public_bind` requirement
+- channel allowlists (per-channel `allowed_*` keys)
+- HMAC verification on channel webhooks (when configured)
+
+Relaxing any of these requires editing the specific config field. The autonomy knob is not a backdoor.
+
+## Reading the code
+
+- `src/security/policy.rs` — autonomy enum, command parser, risk classifier, forbidden_path enforcement
+- `src/security/detect.rs` — sandbox auto-detection
+- `src/security/landlock.rs` — Landlock LSM wrapper
+- `src/security/secrets.rs` — AEAD secret store
+- `src/security/audit.rs` — append-only log + rotation
+- `src/security/pairing.rs` — paired-token issuance and verification
+- `src/gateway/mod.rs` — bind safety, webhook auth, rate limits, idempotency
+- `src/approval/mod.rs` — approval gate

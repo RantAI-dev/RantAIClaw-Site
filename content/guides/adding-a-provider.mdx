@@ -1,0 +1,20 @@
+---
+title: Adding a Provider
+description: Implement the `Provider` trait, register the factory, and wire config — the standard recipe for new LLM backends.
+---
+
+# Adding a Provider
+
+> **v1 status:** stub. Step-by-step walkthrough TBD. In the meantime, see `examples/custom_provider.rs` in the [rantaiclaw repo](https://github.com/RantAI-dev/RantAIClaw/blob/main/examples/custom_provider.rs) and read [Concepts → Channels & Providers](/docs/concepts/channels-and-providers).
+
+## The shape
+
+1. Implement `Provider` in `src/providers/<your_provider>.rs`
+2. Register the factory key in `src/providers/mod.rs`
+3. Add a config struct under `src/config/schema.rs`
+4. Add focused tests for factory wiring and error paths
+5. Document in [Reference → Providers](/docs/reference/providers)
+
+## Reference implementation
+
+`src/providers/openai.rs` and `src/providers/anthropic.rs` are good starting points. Pick whichever protocol shape (OpenAI-compatible vs Anthropic Messages API) is closer to what you are integrating.

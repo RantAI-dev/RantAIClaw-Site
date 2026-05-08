@@ -1,0 +1,43 @@
+---
+title: Writing a Skill
+description: Author a `SKILL.md` that bundles tools and instructions for a domain-specific task.
+---
+
+# Writing a Skill
+
+> **v1 status:** stub. Full schema reference and a multi-skill walkthrough TBD. For now, the canonical skill format is described in [Concepts → Tools & Skills](/docs/concepts/tools-and-skills) and reproduced below.
+
+## Minimal skill
+
+```markdown
+# SKILL.md — deploy-checker
+
+## Description
+Validates deployment readiness before release.
+
+## Tools
+- name: run_checks
+  kind: shell
+  command: ./scripts/pre-deploy.sh
+
+## Instructions
+- Always run pre-deploy checks before approving a release
+- Report any failing checks with specific remediation steps
+- If checks pass, summarize the deployment plan in 3 bullets
+```
+
+## Where it goes
+
+Drop the skill folder into `~/.local/share/rantaiclaw/skills/<name>/` or install it globally to `/usr/local/share/rantaiclaw/skills/<name>/`. Workspace skills override system skills when names collide.
+
+## Publishing to ClawHub
+
+Once your skill is working locally:
+
+```bash
+rantaiclaw skill publish ./path/to/my-skill/
+```
+
+This pushes to [ClawHub](https://clawhub.ai) where other agents can install it via `rantaiclaw skill install <slug>`.
+
+Detailed publishing flow, versioning, and the full SKILL.md schema will be documented here in a later iteration.

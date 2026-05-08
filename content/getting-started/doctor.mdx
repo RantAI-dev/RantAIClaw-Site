@@ -1,0 +1,70 @@
+---
+title: Verifying the Install
+description: Use `rantaiclaw doctor` to validate configuration, channel connectivity, and provider credentials before going live.
+---
+
+# Verifying the Install
+
+`rantaiclaw doctor` runs a battery of checks against your local configuration, profile state, and external dependencies. Use it after installing, after `setup`, and any time something starts behaving oddly.
+
+```bash
+rantaiclaw doctor
+```
+
+## What it checks
+
+The doctor pipeline runs a suite of registered checks (`src/doctor/mod.rs`). Coverage includes:
+
+| Category | Check |
+|---|---|
+| **Binary** | `rantaiclaw` is on `PATH`, version matches |
+| **Config** | `config.toml` exists, parses, passes schema validation |
+| **Provider** | API key resolves; lightweight chat call succeeds |
+| **Channels** | For each enabled channel: credentials valid, network reachable, allowlist not empty (where applicable) |
+| **Memory** | Backend writable; for SQLite, file permissions OK |
+| **Secret store** | Encrypted store readable; AEAD key intact |
+| **MCP servers** | For each configured server: launcher binary present on `PATH` |
+| **Tools** | Built-in tools resolvable; sandbox features compile-matched to runtime |
+| **Sandbox** | Detection runs; reports the active backend (Landlock / Firejail / Bubblewrap / Docker / Noop) |
+
+Each check prints `[PASS]`, `[WARN]`, or `[FAIL]` with a one-line remediation hint when relevant.
+
+> **Caveat on the MCP check:** today it only verifies the launcher binary is on `PATH` — it does **not** spawn the server or run an `initialize` handshake. The full handshake is exercised only during interactive `rantaiclaw setup mcp`. So `doctor` may pass while a server is misconfigured at the protocol level. See [MCP Servers](/docs/concepts/mcp).
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All checks passed (no failures) |
+| `1` | One or more checks failed |
+
+The doctor only differentiates pass / fail. There is no separate config-error exit code today.
+
+This makes `doctor` safe to use as a Docker `HEALTHCHECK` or a CI smoke gate:
+
+```yaml
+healthcheck:
+  test: ["CMD", "rantaiclaw", "doctor"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+```
+
+## Common failures
+
+- **`provider api_key invalid`** — credential revoked or never set. Re-run `rantaiclaw setup`, pick the same provider, the wizard overwrites the secret.
+- **`channel <name> offline / empty allowlist`** — the bot token is wrong, the bot was kicked, the network is unreachable, or you forgot to add anyone to the allowlist. Most channels are deny-by-default on empty.
+- **`mcp server <name> launcher not on PATH`** — `npx`, `node`, or whatever the server's `command` is, isn't installed. Install it; `doctor` re-runs cleanly.
+- **`landlock unsupported on this kernel`** — Landlock requires Linux ≥ 5.13. Either upgrade or accept the warning — the runtime falls through to the next available sandbox (Firejail → Bubblewrap → Docker → Noop).
+- **`memory backend postgres requires --features memory-postgres`** — config asks for postgres but the binary was built without the feature. Rebuild or switch backend to `sqlite`.
+
+For everything else, see [Troubleshooting](/docs/reference/troubleshooting).
+
+## Running selected checks
+
+The doctor pipeline today runs everything by default. To selectively skip or run only certain checks, use the underlying CLI options shown by:
+
+```bash
+rantaiclaw doctor --help
+```

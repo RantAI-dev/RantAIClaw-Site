@@ -1,0 +1,106 @@
+---
+title: Troubleshooting
+description: Common failures, what they mean, and how to fix them.
+---
+
+# Troubleshooting
+
+> **v1 status:** seeded with the most common failures from `rantaiclaw doctor` and the codebase's known sharp edges. The canonical reference in the upstream repo is [`docs/troubleshooting.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/troubleshooting.md).
+
+## Install / first run
+
+**`rantaiclaw: command not found`**
+The installer placed the binary in `~/.cargo/bin` or `~/.local/bin`, neither of which is on your `PATH`. Re-run the bootstrap and copy the `export PATH=...` line it prints into your shell rc.
+
+**`failed to verify checksum`**
+The download was corrupted or tampered with mid-flight. Re-run the bootstrap; if it persists, file an issue with your platform info.
+
+## Provider
+
+**`provider api_key invalid`**
+Your credential was revoked or never set. Run `rantaiclaw setup`, pick the same provider, the wizard overwrites the secret in the encrypted inline `enc2:<hex>` value.
+
+**`provider rate_limited` / 429**
+Transient. The `ReliableProvider` wrapper retries with exponential backoff (capped at 10s) and rotates through `[reliability].api_keys` if you've supplied multiple. If it persists, switch to a higher-tier API key, configure a fallback provider, or add per-model fallback chains.
+
+**`context window exceeded`**
+The retry wrapper recognizes this as non-retryable and surfaces it. Trim the context (shorter system prompt, smaller `K` for memory recall) or move to a model with a larger context window.
+
+## Channels
+
+**`channel <name> offline / not responding`**
+Most likely the bot token is wrong, the bot was kicked from its allowlisted chat, or the network is unreachable. Verify the bot in the platform's UI, then re-run `rantaiclaw doctor`.
+
+**`channel <name> empty allowlist`**
+You enabled the channel but did not add anyone to its allowlist. Most channels treat empty allowlist as offline (deny-by-default). Check the right config key — see [Reference → Channels](/docs/reference/channels) for the per-channel allowlist key names (`allowed_users` / `allowed_contacts` / `allowed_from` / `allowed_numbers` / `allowed_senders`).
+
+**Email replies to everyone, not just my allowlist**
+Email is the one channel that allows-all on empty `allowed_senders`. Set explicit allowed senders or domain prefixes (`@example.com`) to restrict it.
+
+## Gateway
+
+**`Refusing to bind to 0.0.0.0 — set [gateway].allow_public_bind = true`**
+Exactly what it says. Add `allow_public_bind = true` to `[gateway]`, or change `host` back to `127.0.0.1`. Alternative: set `RANTAICLAW_ALLOW_PUBLIC_BIND=1` in env.
+
+**`webhook signature mismatch`**
+Either the HMAC secret is wrong, or the request was tampered with mid-flight. Verify the secret matches the upstream service's webhook configuration. Note: only the channel-specific endpoints (`/whatsapp`, `/linq`, `/nextcloud-talk`) verify HMAC over the body. The generic `/webhook` endpoint uses an `X-Webhook-Secret` shared secret check, not body HMAC.
+
+**Pairing token rejected**
+Tokens are stored as SHA-256 hashes — you cannot recover them from `[gateway].paired_tokens`. Pair again via `POST /pair` with `X-Pairing-Code` to issue a fresh token.
+
+## Approval / Autonomy
+
+**Tool calls from Discord/Slack are silently denied**
+Non-CLI channels have no remote approval flow today — the dispatcher hard-codes `ApprovalResponse::No` for anything not in `[autonomy].auto_approve`. Either add the tool to `auto_approve`, or for shell commands add a pattern to `<profile>/policy/command_allowlist.toml`.
+
+**`rantaiclaw chat` hangs after a tool call**
+The CLI approval prompt blocks on `stdin.read_line` with no timeout — `timeout_secs` is written to the policy file but no consumer reads it yet. Type `y` or `n`. If you've launched the agent in a non-interactive context where stdin isn't connected, add the tool to `auto_approve` instead.
+
+## MCP
+
+**`mcp server <name> launcher not on PATH`**
+`rantaiclaw doctor`'s MCP check only verifies the launcher binary (`npx`, `node`, etc.) is on `PATH`. Install it, then re-run `doctor`.
+
+**`mcp server <name> initialize failed` (during setup)**
+The `initialize` handshake only runs during interactive `rantaiclaw setup mcp` (5s timeout). If it fails: run the configured `command args` manually outside RantAIClaw to see the error. Common cause: missing env vars or wrong `args`.
+
+**Why isn't the LLM calling my MCP tools?**
+Today the MCP supervisor only manages processes — it does not yet register MCP-server tools with the agent loop. This is documented work-in-progress; see [MCP Servers](/docs/concepts/mcp).
+
+## Sandbox
+
+**`landlock unsupported on this kernel`**
+Landlock requires Linux ≥ 5.13. Either upgrade the kernel or accept the warning — RantAIClaw's sandbox auto-detection falls through to the next available backend (Firejail → Bubblewrap → Docker → Noop).
+
+**`sandbox-bubblewrap requires --features sandbox-bubblewrap`**
+Bubblewrap is feature-gated at build time. Rebuild with `cargo build --release --features sandbox-bubblewrap`, or pick a different backend in `[security.sandbox]`.
+
+## Memory
+
+**`memory backend postgres requires --features memory-postgres`**
+You configured `[memory] backend = "postgres"` with a binary built without the feature. Rebuild with `cargo build --release --features memory-postgres`, or use the `sqlite` / `lucid` backend instead.
+
+**Recall returns nothing useful**
+The default embedding provider is `none` — recall is purely lexical (BM25) until you configure a real embedding provider:
+
+```toml
+[memory.embedding]
+provider = "openai"
+model = "text-embedding-3-small"
+```
+
+Plus an API key in env or in the appropriate provider block.
+
+**`brain.db` missing after a redeploy**
+If you enabled `[memory] snapshot_enabled = true`, Core memories are auto-hydrated from `MEMORY_SNAPSHOT.md` on cold boot. Otherwise the agent starts fresh. Mount the workspace volume between deploys to preserve memory.
+
+## Profile / paths
+
+**Where is my config?**
+Default: `~/.rantaiclaw/profiles/default/config.toml`. Override with `--profile <name>`, `RANTAICLAW_PROFILE=<name>`, or `RANTAICLAW_CONFIG_DIR=<path>`. Same path shape on Linux, macOS, and Windows.
+
+**`active_profile` says one thing but `--profile` flag overrides it — which wins?**
+The `--profile` flag wins. Resolution order: `--profile` → `RANTAICLAW_PROFILE` → `~/.rantaiclaw/active_profile` → `default`.
+
+**`config.runtime.toml` doesn't seem to take effect**
+Correct — the loader exists in `src/config/runtime.rs` but is not currently called from `Config::load_or_init`. Live overrides via that file are planned but not yet wired. Edit `config.toml` directly.

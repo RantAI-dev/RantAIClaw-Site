@@ -1,0 +1,142 @@
+---
+title: Your First Agent
+description: Walk through `rantaiclaw setup` to configure a provider, persona, channel, and skills, then start chatting via the TUI or daemon.
+---
+
+# Your First Agent
+
+After [installing](/docs/getting-started/install), bring up your first agent with the guided wizard:
+
+```bash
+rantaiclaw setup
+```
+
+The wizard walks you through six decisions, each with a sensible default. It writes a profile under `~/.rantaiclaw/profiles/default/` (or whichever profile is active — see [Profiles](/docs/concepts/profiles)).
+
+## 1. Provider
+
+Pick the LLM provider your agent will use. RantAIClaw ships with **30+ provider integrations** — the wizard surfaces the most common:
+
+- **OpenRouter** — recommended starting point; one API key reaches 200+ models
+- **Anthropic** — Claude Sonnet, Opus, Haiku
+- **OpenAI** — GPT-4o, o1, o3
+- **Google Gemini** — Gemini 2.5 Pro / Flash
+- **Copilot** — GitHub Copilot models (device-code OAuth)
+- **Local** — Ollama, LM Studio, llama.cpp
+
+Plus regional/specialty providers (xAI/Grok, Groq, Mistral, DeepSeek, Together, Fireworks, Perplexity, Cohere, Moonshot/Kimi, GLM/Zhipu, Qwen, MiniMax, Baidu, Doubao, ZAI). Default model out of the box is `anthropic/claude-sonnet-4.6` via OpenRouter.
+
+You can [add more providers later](/docs/guides/adding-a-provider) without restarting (set them up in config or via subsequent `rantaiclaw setup` runs).
+
+## 2. Approval preset
+
+Choose how much human-in-the-loop oversight tool calls require. The wizard offers four named presets:
+
+| Preset | What it writes |
+|---|---|
+| **L1 — Manual** | Narrow auto-approve list, strict command allowlist; almost everything prompts |
+| **L2 — Smart** | Curated auto-approve list (read tools + safe shell patterns like `ls *`, `cat *`, `git status`) |
+| **L3 — Strict** | Deny-by-default, allows only the L2 read set + memory writes + skill installs + cron / session ops |
+| **L4 — Off** | Runtime `level = "full"`; auto-approves everything except forbidden paths and high-risk commands |
+
+L2 is the recommended starting default. See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full mechanics — the runtime enum has only three values (`read_only`, `supervised`, `full`); the L1–L4 names are preset bundles the wizard writes.
+
+## 3. Channels
+
+Pick where the agent should listen and reply. You can select multiple at once. Built-in channels:
+
+- `cli`, `dingtalk`, `discord`, `email_channel`, `imessage`, `irc`, `linq`, `mattermost`, `nextcloud_talk`, `qq`, `qr_terminal`, `signal`, `slack`, `telegram`, `whatsapp`
+- Feature-gated: `whatsapp_web`, `lark`, `matrix` (E2EE)
+
+The wizard prompts for credentials per channel and saves them encrypted as `enc2:<hex>` strings inline in `config.toml`.
+
+> **Allowlist warning.** Most channels treat empty allowlist as offline (deny-by-default). The wizard prompts you for the allowlist values it needs — don't skip them or the channel will silently never respond. Email is the only exception that allows-all on empty allowlist.
+
+## 4. Persona
+
+A persona is a system-prompt + behavioral profile. The wizard offers built-in presets bundled with the binary, plus a custom option.
+
+Personas are written to `<profile>/persona/persona.toml` + `<profile>/persona/SYSTEM.md`. The wizard's preset choice copies one of the bundled `src/persona/presets/*.md` files into the active profile.
+
+You can swap personas by editing those files or running `rantaiclaw personality` to change the active one.
+
+## 5. Skills
+
+Skills are markdown- or TOML-defined capabilities with embedded tools and instructions. The wizard:
+
+- Materializes the bundled **starter pack** (5 skills compiled into the binary) into `<profile>/skills/`
+- Optionally enables **open-skills** auto-sync (pulls from `besoeasy/open-skills` every 7 days)
+- Optionally enables **SkillForge** auto-discovery (off by default)
+
+You can add skills later from any git URL or local path:
+
+```bash
+rantaiclaw skills install <git-url-or-path>
+rantaiclaw skills list
+rantaiclaw skills show <name>
+rantaiclaw skills remove <name>
+```
+
+## 6. MCP servers (optional)
+
+If you want the agent's process tree to supervise [Model Context Protocol](https://modelcontextprotocol.io) servers, the wizard lets you pick from a curated list (GitHub, Notion, Linear, Slack, Google Drive/Calendar/Gmail, etc.). The wizard:
+
+1. Prompts for credentials (or kicks off OAuth for Google services)
+2. Spawns the configured server and runs an `initialize` handshake (5s timeout) to verify it works
+3. Writes the spec into `[mcp_servers.<name>]` in the active profile's `config.toml`
+
+> **Important caveat:** today the supervisor only manages the *processes*. The MCP servers' tools are **not yet integrated with the agent loop** — the LLM cannot directly call MCP-server tools. This is documented work-in-progress; see [MCP Servers](/docs/concepts/mcp).
+
+## Start chatting
+
+The simplest way to talk to your agent:
+
+```bash
+rantaiclaw chat                    # launches the TUI (with feature 'tui', the default build)
+```
+
+For a one-shot CLI message:
+
+```bash
+rantaiclaw agent --message "hello"
+```
+
+For an interactive REPL on the CLI channel:
+
+```bash
+rantaiclaw agent
+```
+
+For production deployment, run the daemon — it boots the gateway, all configured channels, the heartbeat, and the scheduler:
+
+```bash
+rantaiclaw daemon
+```
+
+The daemon's components are each supervised with backoff restart, so a misbehaving channel won't take the whole agent down.
+
+## Where things live
+
+All under `~/.rantaiclaw/`:
+
+| Path | What it stores |
+|---|---|
+| `~/.rantaiclaw/.secret_key` | AEAD master key (mode 0600) |
+| `~/.rantaiclaw/active_profile` | Plain text — name of the active profile |
+| `~/.rantaiclaw/profiles/<name>/config.toml` | Per-profile static config (encrypted secrets stored inline as `enc2:<hex>`) |
+| `~/.rantaiclaw/profiles/<name>/persona/persona.toml` + `SYSTEM.md` | Persona definition |
+| `~/.rantaiclaw/profiles/<name>/policy/autonomy.toml` | Autonomy level + per-tool lists (written by L1–L4 preset selector) |
+| `~/.rantaiclaw/profiles/<name>/policy/command_allowlist.toml` | Quote-aware glob patterns for shell |
+| `~/.rantaiclaw/profiles/<name>/policy/forbidden_paths.toml` | Path blocklist |
+| `~/.rantaiclaw/profiles/<name>/skills/` | Locally installed skills |
+| `~/.rantaiclaw/profiles/<name>/secrets/api_keys.toml` | OAuth tokens (Google services), mode 0600 |
+| `~/.rantaiclaw/profiles/<name>/audit.log` | JSONL audit log |
+| `~/.rantaiclaw/profiles/<name>/workspace/memory/brain.db` | SQLite memory store (default) |
+
+**Same paths on Linux, macOS, and Windows.** No XDG, no `~/Library/Application Support`. The agent uses `home_dir()` and tucks everything under `<home>/.rantaiclaw/`.
+
+## Next
+
+- [Verify the install](/docs/getting-started/doctor) with `rantaiclaw doctor`.
+- Learn [how the runtime is built](/docs/concepts/architecture) so you can extend it.
+- Read [Profiles](/docs/concepts/profiles) if you want to run multiple agents on the same host.

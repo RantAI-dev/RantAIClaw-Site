@@ -1,0 +1,27 @@
+---
+title: Concepts
+description: How RantAIClaw is built — the trait + factory architecture, the agent loop, autonomy, and security model.
+---
+
+# Concepts
+
+These pages explain *how RantAIClaw works*, not how to use it. Read them when you want to:
+
+- understand the runtime well enough to extend it
+- decide where to plug in new behavior
+- reason about failure modes and security boundaries
+
+| Page | What it covers |
+|---|---|
+| [Architecture](/docs/concepts/architecture) | The trait + factory pattern, subsystem map, blast-radius tiers |
+| [Profiles](/docs/concepts/profiles) | The per-profile workspace under `~/.rantaiclaw/profiles/<name>/` |
+| [Agent Loop](/docs/concepts/agent-loop) | How a single message flows from channel to tool to reply |
+| [Autonomy Levels](/docs/concepts/autonomy-levels) | The 3-level runtime enum and the L1–L4 onboarding presets |
+| [Channels & Providers](/docs/concepts/channels-and-providers) | The two big extension points and why they are separate |
+| [Tools & Skills](/docs/concepts/tools-and-skills) | What an agent can *do* — and the difference between a tool and a skill |
+| [Memory](/docs/concepts/memory) | Backends, hybrid recall, and persistence |
+| [Gateway & Live Config](/docs/concepts/gateway) | The HTTP control plane: pairing, webhooks, triggers |
+| [MCP Servers](/docs/concepts/mcp) | Model Context Protocol supervisor (process-only today) |
+| [Security Model](/docs/concepts/security) | Sandboxing, allowlists, secret store, audit logging |
+
+If you are looking for a step-by-step "first agent" walkthrough, that lives in [Getting Started](/docs/getting-started). If you are looking for *what to type*, see [Reference](/docs/reference).

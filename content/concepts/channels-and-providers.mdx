@@ -1,0 +1,247 @@
+---
+title: Channels & Providers
+description: Channels move messages in and out. Providers talk to LLMs. Both are trait-driven; their config blocks are completely separate from each other.
+---
+
+# Channels & Providers
+
+Two of the largest extension surfaces, deliberately decoupled. A channel knows nothing about which LLM is replying; a provider knows nothing about which platform the message came from.
+
+## Channels
+
+### What ships
+
+The actual built-in channel set (`src/channels/mod.rs`):
+
+| Slug | Status | Build feature |
+|---|---|---|
+| `cli` | Always-on | (default) |
+| `dingtalk` | Always-on | (default) |
+| `discord` | Always-on | (default) |
+| `email_channel` | Always-on | (default) |
+| `imessage` | Always-on | (default) |
+| `irc` | Always-on | (default) |
+| `linq` | Always-on | (default) |
+| `mattermost` | Always-on | (default) |
+| `nextcloud_talk` | Always-on | (default) |
+| `qq` | Always-on | (default) |
+| `qr_terminal` | Always-on | (default) |
+| `signal` | Always-on | (default) |
+| `slack` | Always-on | (default) |
+| `telegram` | Always-on | (default) |
+| `whatsapp` | Always-on (Cloud API) | (default) |
+| `whatsapp_web` | Feature-gated (Multi-device) | `whatsapp-web` |
+| `lark` | Feature-gated | `channel-lark` |
+| `matrix` | Feature-gated (E2EE) | `channel-matrix` |
+
+There is no separate `whatsapp-cloud` slug — Cloud API is just `whatsapp`. The Web variant (`whatsapp_web`) requires the `whatsapp-web` Cargo feature.
+
+### The Channel trait
+
+```rust
+// src/channels/traits.rs (simplified)
+#[async_trait]
+pub trait Channel: Send + Sync {
+    fn name(&self) -> &str;
+
+    async fn send(&self, message: &SendMessage) -> Result<()>;
+
+    async fn listen(
+        &self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+        cancel: CancellationToken,
+    ) -> Result<()>;
+
+    async fn health_check(&self) -> bool { true }
+
+    async fn start_typing(&self, recipient: &str) -> Result<()> { Ok(()) }
+    async fn stop_typing(&self, recipient: &str) -> Result<()> { Ok(()) }
+
+    // Draft-update methods — channels that support edit-in-place override these
+    fn supports_draft_updates(&self) -> bool { false }
+    async fn send_draft(&self, ...) -> Result<DraftHandle> { ... }
+    async fn update_draft(&self, ...) -> Result<()> { ... }
+    async fn finalize_draft(&self, ...) -> Result<()> { ... }
+    async fn cancel_draft(&self, ...) -> Result<()> { ... }
+}
+```
+
+A few things to notice:
+
+- `listen` takes both a `Sender<ChannelMessage>` and a `CancellationToken` for graceful shutdown.
+- Typing indicators are split: `start_typing` and `stop_typing`, taking a recipient `&str` (not a single `typing(id, on)` call).
+- The trait carries a draft-update sub-API for channels that support editing a sent message in place. Discord and Slack implement these; CLI doesn't.
+
+### Allowlists per channel
+
+Every channel reads an allowlist from its config block. Most use `allowed_users`, but the key name varies:
+
+| Channel | Allowlist key |
+|---|---|
+| `telegram`, `discord`, `slack`, `mattermost`, `matrix`, `irc`, `dingtalk`, `lark`, `qq`, `nextcloud_talk` | `allowed_users` |
+| `imessage` | `allowed_contacts` |
+| `signal` | `allowed_from` |
+| `whatsapp`, `whatsapp_web` | `allowed_numbers` |
+| `email_channel`, `linq` | `allowed_senders` |
+
+Most channels treat **empty allowlist as deny-all (offline)** — that's the deny-by-default rule. Email and Linq use `allowed_senders` with domain-prefix support (`@example.com` matches the whole domain).
+
+> **Email is the exception:** when `allowed_senders` is empty, the email channel allows all senders. This is unlike every other channel. Set explicit allowed senders or domain prefixes to restrict it.
+
+`telegram` is also unusual in that it supports **runtime allowlist mutation** (`add_allowed_identity_runtime`) — the agent can add an allowed user without a restart. No other channel currently supports this.
+
+### Adding a channel
+
+1. Create `src/channels/<name>.rs` and implement the `Channel` trait
+2. Register the factory key in `src/channels/mod.rs`
+3. Add a config struct under `[channels.<name>]` in `src/config/schema.rs`
+4. Pick a sensible allowlist key name (use `allowed_users` if the channel concept matches "user")
+5. Add tests for auth, allowlist enforcement, and reconnect
+
+## Providers
+
+### What ships
+
+The provider list is large. Real factory keys per `src/providers/mod.rs`:
+
+**Custom backends (full implementations):**
+- `openrouter`, `anthropic`, `openai`, `ollama`, `gemini` (alias `google`/`google-gemini`), `bedrock` (alias `aws-bedrock`), `copilot` (alias `github-copilot`)
+
+**OpenAI-compatible (single explicit key):**
+- `venice`, `vercel` (alias `vercel-ai`), `cloudflare` (alias `cloudflare-ai`), `kimi-code` family
+- `synthetic`, `opencode` (alias `opencode-zen`)
+- `groq`, `mistral`, `xai` (alias `grok`), `deepseek`
+- `together` (alias `together-ai`), `fireworks` (alias `fireworks-ai`)
+- `perplexity`, `cohere`, `lmstudio` (alias `lm-studio`), `llamacpp` (alias `llama.cpp`)
+- `nvidia` (alias `nvidia-nim`), `astrai`, `ovhcloud` (alias `ovh`)
+
+**Alias-matched regional families:**
+- `moonshot*` / `kimi*`
+- `glm*` / `zhipu*` / `bigmodel`
+- `minimax*` / `minimaxi`
+- `qwen*` / `dashscope*`
+- `zai` / `z.ai*`
+- `qianfan` / `baidu`
+- `doubao` / `volcengine` / `ark`
+
+**Custom URL prefixes:**
+- `custom:<url>` — generic OpenAI-compatible at the given base
+- `anthropic-custom:<url>` — Anthropic-shape protocol at the given base
+
+**Special:**
+- `openai-codex` (aliases `openai_codex`, `codex`) — uses OpenAI's device-code auth flow
+
+There is no plain `"zai-glm"` slug or plain `"custom"` (without colon).
+
+### The Provider trait
+
+```rust
+// src/providers/traits.rs (simplified)
+#[async_trait]
+pub trait Provider: Send + Sync {
+    fn capabilities(&self) -> ProviderCapabilities { /* default */ }
+
+    fn convert_tools(&self, tools: &[ToolSpec]) -> ToolsPayload;
+
+    async fn simple_chat(&self, message: &str, model: &str, temperature: f32) -> Result<String>;
+
+    // The only required method
+    async fn chat_with_system(
+        &self,
+        system_prompt: &str,
+        message: &str,
+        model: &str,
+        temperature: f32,
+    ) -> Result<String>;
+
+    async fn chat_with_history(...) -> Result<String>;
+    async fn chat(&self, request: ChatRequest, model: &str, temperature: f32) -> Result<ChatResponse>;
+    async fn chat_with_tools(...) -> Result<ChatResponse>;
+
+    async fn chat_stream(...) -> Result<BoxStream<StreamResult<StreamChunk>>>;
+    async fn stream_chat_with_system(...) -> ...;
+    async fn stream_chat_with_history(...) -> ...;
+
+    fn supports_native_tools(&self) -> bool;
+    fn supports_vision(&self) -> bool;
+    fn supports_streaming(&self) -> bool;
+
+    async fn warmup(&self) -> Result<()>;
+}
+
+pub struct ProviderCapabilities {
+    pub native_tool_calling: bool,
+    pub vision: bool,
+}
+```
+
+`ProviderCapabilities` carries only those two fields — there is no `json_mode`, no `system_prompts` field.
+
+For tool calling, the `convert_tools` method returns a `ToolsPayload` enum with variants for `Gemini`, `Anthropic`, `OpenAI`, and `PromptGuided` (a fallback that injects `<tool_call>`-tagged XML into the user prompt for providers without native tool calling).
+
+### Multi-provider routing
+
+The configuration is **not** a `[provider]` block. Real shape:
+
+```toml
+default_provider = "openrouter"
+default_model = "anthropic/claude-sonnet-4.6"
+api_key = "${OPENROUTER_API_KEY}"
+api_url = "https://openrouter.ai/api/v1"
+
+[reliability]
+provider_retries = 2
+provider_backoff_ms = 500
+fallback_providers = ["anthropic", "openai"]
+api_keys = ["${OPENROUTER_KEY_1}", "${OPENROUTER_KEY_2}"]   # rotated on 429
+
+[reliability.model_fallbacks]
+"anthropic/claude-sonnet-4.6" = ["anthropic/claude-haiku-4.5", "openai/gpt-4o"]
+
+[[model_routes]]
+hint = "claude-"
+provider = "anthropic"
+api_key = "${ANTHROPIC_KEY}"
+```
+
+Top-level scalars (`default_provider`, `default_model`, `api_url`, `api_key`) declare the primary. `[reliability]` controls retry/fallback behavior. `[[model_routes]]` lets per-model name prefixes route to different providers and credentials.
+
+### The reliability wrapper
+
+`src/providers/reliable.rs` (note: `reliable.rs`, not `resilient.rs`) wraps every provider with:
+
+- **Retry with exponential backoff** — base `provider_backoff_ms = 500`, doubles capped at **10s** per attempt
+- **Multi-provider fallback** — falls through `fallback_providers` chain when retries exhaust
+- **Per-model fallback chains** — `model_fallbacks` map for swapping models within a provider
+- **API-key rotation** — on 429, rotates through `api_keys` (note: rotation is wired but only logs; no `set_api_key` on the trait yet)
+- **`Retry-After` header parsing** — honors server-supplied retry windows
+- **Non-retryable error classification** — 4xx, auth, context-window-exceeded all bypass retry
+
+What it **does not** do:
+
+- No timeout (per-request timeouts come from the underlying HTTP client config)
+- No circuit breaker — each call resets backoff state
+
+### Adding a provider
+
+1. Create `src/providers/<name>.rs` and implement the `Provider` trait (only `chat_with_system` is strictly required; default impls handle the rest)
+2. Register the factory key in `src/providers/mod.rs`
+3. Add a config struct under the relevant `[providers.<name>]` block (or use top-level `api_key`/`api_url` for the default provider)
+4. Add focused tests for factory wiring and error mapping
+
+## Why the separation matters
+
+Channels and providers are kept apart for two reasons:
+
+**Architectural.** Channel code that imports provider internals creates the coupling that explodes when you swap one out. The agent loop is the only contract that ties them.
+
+**Operational.** Channels fail differently from providers. Discord disconnects; Telegram rate-limits; Slack rotates tokens. Providers throttle and rate-limit on their own schedules. Each subsystem gets its own retry/circuit-breaker logic suited to its failure mode. The reliability wrapper handles provider failures; per-channel reconnect logic handles channel failures.
+
+## Reading the code
+
+- `src/channels/traits.rs` — `Channel` trait + `ChannelMessage`, `SendMessage`, `DraftHandle`
+- `src/channels/mod.rs` — factory + feature-gated module declarations
+- `src/providers/traits.rs` — `Provider` trait + `ProviderCapabilities` + `ToolsPayload`
+- `src/providers/mod.rs` — factory functions + alias matchers
+- `src/providers/reliable.rs` — `ReliableProvider` wrapper
+- `src/config/schema.rs` — top-level provider scalars + `[reliability]` + `[[model_routes]]` + per-channel config blocks

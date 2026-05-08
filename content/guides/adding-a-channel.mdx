@@ -1,0 +1,27 @@
+---
+title: Adding a Channel
+description: Implement the `Channel` trait — the standard recipe for new communication platforms.
+---
+
+# Adding a Channel
+
+> **v1 status:** stub. Step-by-step walkthrough TBD. In the meantime, see `examples/custom_channel.rs` in the [rantaiclaw repo](https://github.com/RantAI-dev/RantAIClaw/blob/main/examples/custom_channel.rs) and read [Concepts → Channels & Providers](/docs/concepts/channels-and-providers).
+
+## The shape
+
+1. Create `src/channels/<your_channel>.rs` and implement the `Channel` trait
+2. Register the factory key in `src/channels/mod.rs`
+3. Add a config struct under `src/config/schema.rs` for channel-specific settings (auth, allowlists, transport options)
+4. Add tests for auth, allowlist enforcement, and disconnect/reconnect
+5. Document in [Reference → Channels](/docs/reference/channels)
+
+## Reference implementations
+
+- `src/channels/discord.rs` — WebSocket transport with reconnect
+- `src/channels/telegram.rs` — long-poll transport
+- `src/channels/email.rs` — IMAP listen + SMTP send
+- `src/channels/cli.rs` — stdin/stdout for the simplest possible channel
+
+## Allowlists
+
+Every channel must respect an allowlist. The default for an empty allowlist is **offline**, not **open**. This is enforced by review, not by the trait — but it is a hard requirement for in-tree channels.

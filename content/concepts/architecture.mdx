@@ -1,0 +1,121 @@
+---
+title: Architecture
+description: The trait + factory pattern, the profile system, the full subsystem map, and the blast-radius tiers that govern how RantAIClaw is built.
+---
+
+# Architecture
+
+RantAIClaw is **trait-driven and factory-registered**. Every major extension point — providers, channels, tools, memory backends, observers, runtime adapters, peripherals — is defined as a Rust trait, with concrete implementations registering themselves via factory modules. To add a capability, you implement a trait and register it; you almost never modify orchestration code.
+
+Around that core sit two organizing layers worth knowing about up front:
+
+- **The profile system** — everything about a running agent (config, memory, persona, skills, secrets, audit) lives under `~/.rantaiclaw/profiles/<active>/`. See [Profiles](/docs/concepts/profiles).
+- **The subsystem map** — 30+ Rust modules under `src/`, each with a single responsibility. The map below summarizes the ones you'll touch most often.
+
+## The seven extension traits
+
+| Trait | File | What it abstracts |
+|---|---|---|
+| `Provider` | `src/providers/traits.rs` | LLM backends — OpenRouter, OpenAI, Anthropic, Gemini, Copilot, plus 25+ OpenAI-compatible/regional providers |
+| `Channel` | `src/channels/traits.rs` | Communication endpoints — Discord, Slack, Telegram, WhatsApp, Email, IRC, Signal, Matrix, iMessage, plus more |
+| `Tool` | `src/tools/traits.rs` | Actions an agent can take — `shell`, `file_*`, `cron_*`, `memory_*`, `web_search_tool`, etc. |
+| `Memory` | `src/memory/traits.rs` | Persistence — sqlite, lucid (sqlite + markdown overlay), markdown, postgres, none |
+| `Observer` | `src/observability/traits.rs` | Tracing, metrics, audit logs |
+| `RuntimeAdapter` | `src/runtime/traits.rs` | Process model, sandbox, signal handling |
+| `Peripheral` | `src/peripherals/traits.rs` | Hardware boards — STM32, Raspberry Pi GPIO, Arduino |
+
+## Top-level subsystem map
+
+The actual `src/` tree is broader than the seven traits would suggest. The full top-level subsystems:
+
+| Subsystem | Owns |
+|---|---|
+| `agent/` | Orchestration loop, persona application, tool dispatch, memory loader |
+| `approval/` | Approval gate (CLI prompt, session-scoped allowlist), L1–L4 preset writer |
+| `auth/` | Auth flows for providers — OAuth, OpenAI Codex device-code, Anthropic subscription tokens |
+| `channels/` | Per-channel transport, allowlist enforcement |
+| `config/` | Schema, load/merge, runtime overrides (planned), JSON Schema export |
+| `cost/` | Cost tracking and per-day caps |
+| `cron/` | Cron job storage, scheduler, execution history |
+| `daemon/` | The `rantaiclaw daemon` supervisor — boots gateway + channels + scheduler + heartbeat |
+| `doctor/` | The `rantaiclaw doctor` validator and its individual checks |
+| `gateway/` | HTTP control plane — pairing, webhooks, triggers, `/api/v1/*` |
+| `hardware/` | Hardware discovery (USB, serial) |
+| `health/` | Health endpoint payload, runtime snapshot |
+| `heartbeat/` | Periodic vitality and self-check signals |
+| `identity/` | Agent identity / project-context bootstrap |
+| `integrations/` | External service integrations |
+| `lifecycle/` | Process lifecycle (signals, graceful shutdown) |
+| `mcp/` | MCP server supervision (process-level today) |
+| `memory/` | Memory traits and 5 backends + hygiene + snapshot/hydration + response cache |
+| `migration/` | Profile migrations between versions |
+| `multimodal.rs` | Multimodal payload helpers |
+| `observability/` | Tracing, Prometheus metrics |
+| `onboard/` | The `setup` / `onboard` interactive wizards |
+| `peripherals/` | Hardware peripherals (STM32, RPi GPIO, ESP32, Arduino) |
+| `persona/` | Persona presets, persona.toml + SYSTEM.md loader |
+| `profile/` | Profile system — paths, active profile resolution, profile CLI |
+| `providers/` | Provider traits + reliability wrapper + 30+ provider implementations |
+| `rag/` | Retrieval-augmented generation helpers |
+| `runtime/` | Runtime adapter — sandbox detection, Docker, native exec |
+| `security/` | Approval policy, sandbox (Landlock/Firejail/Bubblewrap/Docker/Noop), secret store, audit log |
+| `service/` | systemd / launchd / Windows service generators |
+| `services/` | Service detection and integration |
+| `sessions/` | Session storage and lookup (per-conversation state) |
+| `skillforge/` | Auto-discovery pipeline for community skills |
+| `skills/` | Skill loading (TOML/MD), discovery, prompt injection, ClawHub installer, open-skills sync |
+| `tasks/` | Task / subtask CRUD (HTTP-exposed) |
+| `tools/` | Tool traits + built-in tools + skill-tool adapter |
+| `tui/` | Terminal UI |
+| `tunnel/` | Tunnel manager (cloudflared, ngrok) for public exposure without binding |
+
+This is what makes `rantaiclaw` a single binary that can do a lot — the responsibilities are partitioned narrowly, so each subsystem stays small and auditable.
+
+## Boundary contract
+
+These rules keep the architecture stable as the codebase grows:
+
+- **Concrete integrations depend on traits and config, never on each other.** Provider code does not import channel internals. Tool code does not mutate gateway policy directly.
+- **Each subsystem owns a single concern.** Orchestration in `agent/`. Transport in `channels/`. Model I/O in `providers/`. Policy in `security/`. Execution in `tools/`.
+- **New shared abstractions wait for the rule of three.** Duplicate small logic locally rather than create premature abstractions.
+- **Config keys are public contract.** Adding, renaming, or removing a config key requires documented compatibility impact and a migration path.
+
+## Blast radius — risk tiers
+
+Validation depth scales with tier:
+
+| Tier | Paths | Required for changes |
+|---|---|---|
+| **Low** | `docs/`, tests, chores | Lightweight checks |
+| **Medium** | Most `src/**` without security/boundary impact | Full relevant tests |
+| **High** | `src/security/**`, `src/runtime/**`, `src/gateway/**`, `src/tools/**`, `.github/workflows/**`, `Cargo.toml`, config schema, CLI behavior | Risk note + failure-mode validation + rollback note |
+
+When in doubt, classify higher.
+
+## The daemon's role
+
+`rantaiclaw daemon` is the production deployment shape. It boots:
+
+- the gateway HTTP server
+- each enabled channel's listen task
+- the heartbeat / scheduler / cron loops
+
+Each of these runs in its own tokio task, supervised with **exponential-backoff restart on crash** (`src/daemon/mod.rs`). A misbehaving channel doesn't take down the gateway and vice versa.
+
+## Why size and determinism matter
+
+Two design constraints visible everywhere in the codebase:
+
+1. **Binary size is a product goal.** The release profile uses `opt-level = "z"`, `lto = "fat"`, `codegen-units = 1`, `strip = true`, `panic = "abort"`. Convenience dependencies are scrutinized.
+2. **Determinism is a CI goal.** Tests avoid flaky timing or network dependence. Local validation maps exactly to CI expectations.
+
+Breaking either requires explicit justification.
+
+## Where to read next
+
+- [Profiles](/docs/concepts/profiles) — the per-profile workspace under `~/.rantaiclaw/profiles/<name>/`
+- [Agent Loop](/docs/concepts/agent-loop) — what happens between message arriving and reply going out
+- [Autonomy Levels](/docs/concepts/autonomy-levels) — the 3-level runtime enum and L1–L4 preset bundles
+- [Channels & Providers](/docs/concepts/channels-and-providers) — the two largest extension surfaces
+- [Tools & Skills](/docs/concepts/tools-and-skills) — how the agent acts on the world
+- [Security Model](/docs/concepts/security) — the deny-by-default boundaries

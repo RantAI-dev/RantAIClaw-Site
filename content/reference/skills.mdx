@@ -1,0 +1,135 @@
+---
+title: Skills
+description: "`SKILL.toml` and `SKILL.md` formats. The TOML format is the canonical source of structured metadata; markdown is a prose-only fallback."
+---
+
+# Skills
+
+A skill is a directory under `<profile>/skills/<slug>/` containing one of:
+
+- **`SKILL.toml`** — preferred. Structured metadata + optional tool definitions parsed and exposed to the LLM as callable functions.
+- **`SKILL.md`** — fallback. The whole file content is included in the agent's prompt; **no section parsing**.
+
+If both exist, `SKILL.toml` wins.
+
+## SKILL.toml schema
+
+```toml
+name = "deploy-checker"
+description = "Validates deployment readiness before release."
+
+# Optional metadata
+version = "0.1.0"
+author = "Your Name"
+tags = ["devops", "release"]
+
+# Optional tools — exposed to the LLM as callable functions
+[[tools]]
+name = "run_checks"
+description = "Run the pre-deploy validator script"
+kind = "shell"
+command = "./scripts/pre-deploy.sh"
+
+[[tools]]
+name = "check_url"
+description = "Check that a URL returns 200"
+kind = "http"
+method = "GET"
+url = "https://my-app.example.com/health"
+
+# Optional prompt content — prepended to the system prompt when this skill is active
+[[prompts]]
+content = """
+- Always run pre-deploy checks before approving a release
+- Report any failing checks with specific remediation steps
+- If checks pass, summarize the deployment plan in 3 bullets
+"""
+
+# Optional match expressions — auto-load when an incoming message matches
+[[match]]
+pattern = "deploy"
+type = "contains"
+```
+
+## Tool kinds (executable)
+
+When a skill defines `[[tools]]`, only two kinds are executable via `SkillToolAdapter` (`src/tools/skill_tool.rs`):
+
+| Kind | Effect |
+|---|---|
+| `shell` | Runs `command` via shell, returns stdout |
+| `http` | Makes an HTTP request, returns body |
+
+Other kinds (`template`, `builtin`, etc.) return `"Unsupported skill tool kind"`. Constraints:
+
+- 120-second timeout
+- 1MB output cap
+- Skill tools are exposed to the LLM with the prefix `skill_<skill>_<tool>` (underscores)
+
+## SKILL.md (markdown) — what actually happens
+
+If you only ship a `SKILL.md`, the loader at `src/skills/mod.rs::load_skill_md`:
+
+- Uses the **directory name** as the skill's name.
+- Extracts the **first non-heading non-blank line** as the skill's `description`.
+- Stuffs **the entire file content** into the skill's first prompt block.
+
+It does **not** parse `## Description`, `## Tools`, `## Instructions`, `## Match`, `## Metadata`, or `## Permissions` sections. Those headers are *prompt convention for the LLM*, not loader-enforced schema. Specifically:
+
+- A `## Tools` block with `kind: builtin` items is **not parsed as runtime tool definitions**. The LLM reads the prose; the runtime does not register callable tools from it.
+- For real LLM-callable skill tools, write `SKILL.toml` instead.
+
+A typical SKILL.md is fine for narrative skills (a persona overlay, a domain checklist, instructions the LLM follows in plain language) but cannot expose structured tools.
+
+## Skill discovery order
+
+The loader searches in priority order (`src/skills/mod.rs`):
+
+1. **open-skills repo** at `~/open-skills/` (or `RANTAICLAW_OPEN_SKILLS_DIR`), only if `[skills].open_skills_enabled = true`
+2. **Profile-level** at `<workspace_dir>/../skills/`
+3. **Workspace-level** at `<workspace_dir>/skills/`
+
+On name collision, profile-level wins. Bundled built-in skills (the **starter pack**) are not searched at runtime — they're materialized into the active profile during `setup`.
+
+The paths `~/.local/share/rantaiclaw/skills/` and `/usr/local/share/rantaiclaw/skills/` are **not** searched.
+
+## Prompt-injection modes
+
+```toml
+[skills]
+mode = "Full"      # default — embeds full skill prompt + tools inline in system prompt
+# or
+mode = "Compact"   # only name + description + path; agent reads file on demand
+```
+
+Compact mode saves tokens for agents with many skills installed.
+
+## Auto-sources
+
+```toml
+[skills]
+open_skills_enabled = true
+open_skills_url = "https://github.com/besoeasy/open-skills"
+# Auto-pulls every 7 days into ~/open-skills/
+
+skillforge_enabled = false
+skillforge_min_score = 0.7
+skillforge_scan_interval_hours = 24
+# Auto-discovers skills from GitHub + ClawHub, scores them, proposes integrations
+```
+
+## Installing skills
+
+```bash
+rantaiclaw skills list
+rantaiclaw skills show <name>
+rantaiclaw skills install <git-url>
+rantaiclaw skills install <local-path>
+rantaiclaw skills remove <name>
+```
+
+`install` clones a git repo or copies a local directory into `<profile>/skills/<slug>/`.
+
+## Publishing to ClawHub
+
+ClawHub is RantAIClaw's package registry for community skills. Publishing today is HTTP-driven through clawhub.ai; there is no `rantaiclaw skills publish` CLI subcommand yet.

@@ -1,0 +1,133 @@
+---
+title: Configuration
+description: "`config.toml` schema — every section, every key. The full top-level shape lives in `src/config/schema.rs` and can be exported as JSON Schema."
+---
+
+# Configuration
+
+> **v1 status:** placeholder list of sections, hand-written from `pub struct Config` in `src/config/schema.rs`. The page should eventually be generated from `cargo run -- config schema --json` (the schema is produced by `schemars` derive on the config struct). The canonical reference in the upstream repo is [`docs/config-reference.md`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docs/config-reference.md).
+
+## File locations
+
+Per-profile (under `~/.rantaiclaw/profiles/<active>/`):
+
+| Path | Role |
+|---|---|
+| `config.toml` | Static config (hand-edited or written by `setup`) |
+| `config.runtime.toml` | **Planned** live overrides — loader exists but is not yet wired into `Config::load_or_init` |
+| `policy/autonomy.toml` | Autonomy preset writes |
+| `policy/command_allowlist.toml` | Shell command glob patterns |
+| `policy/forbidden_paths.toml` | Path blocklist |
+| `secrets/api_keys.toml` | OAuth tokens for MCP integrations |
+
+Master AEAD key (shared across profiles):
+
+```
+~/.rantaiclaw/.secret_key   (mode 0600 on Unix)
+```
+
+Path resolution waterfall:
+
+1. `RANTAICLAW_CONFIG_DIR` env var
+2. `RANTAICLAW_WORKSPACE` env var
+3. `active_workspace.toml` marker file
+4. Profile-aware default — `~/.rantaiclaw/profiles/<active>/`
+5. Flat fallback — `~/.rantaiclaw/`
+
+Same shape on Linux, macOS, and Windows.
+
+## Top-level scalars
+
+These live at the root of `config.toml`:
+
+| Key | Type | Default |
+|---|---|---|
+| `default_provider` | string | `"openrouter"` |
+| `default_model` | string | `"anthropic/claude-sonnet-4.6"` |
+| `default_temperature` | float | (provider default) |
+| `api_key` | string (encrypted as `enc2:<hex>`) | — |
+| `api_url` | string | (provider default) |
+| `workspace_dir` | path | profile workspace |
+| `config_path` | path | (set by loader) |
+
+## Top-level sections
+
+The `Config` struct in `src/config/schema.rs` has 32 sections:
+
+| Section | Purpose |
+|---|---|
+| `[observability]` | Tracing, Prometheus, OTLP export |
+| `[autonomy]` | Runtime level, auto_approve, always_ask, forbidden_paths, workspace_only, rate caps |
+| `[runtime]` | Process model, runtime adapter |
+| `[reliability]` | Provider retries, fallback chain, API key rotation, channel reconnect backoff |
+| `[scheduler]` | Cron / scheduled task settings |
+| `[agent]` | Agent-loop knobs (`parallel_tools`, etc.) |
+| `[skills]` | Discovery sources, prompt-injection mode, open-skills auto-sync, SkillForge |
+| `[[model_routes]]` | Per-model name-prefix routing to provider/credentials |
+| `[[embedding_routes]]` | Per-embedding-model routing |
+| `[query_classification]` | LLM-driven message classification |
+| `[heartbeat]` | Periodic vitality signals |
+| `[cron]` | Cron job storage |
+| `[tasks]` | Task subsystem (HTTP-exposed CRUD) |
+| `[channels_config]` | Cross-channel behavior |
+| `[memory]` | Backend, retention, embedding, hybrid weights, snapshot |
+| `[storage]` | Storage provider override |
+| `[tunnel]` | cloudflared / ngrok |
+| `[gateway]` | HTTP control plane (host, port, allow_public_bind, paired_tokens, rate limits) |
+| `[composio]` | Composio integration |
+| `[secrets]` | Encryption toggle |
+| `[browser]` | Browser tool settings |
+| `[http_request]` | HTTP request tool settings |
+| `[multimodal]` | Multimodal payload settings |
+| `[web_search]` | Web search tool settings |
+| `[services]` | Service detection |
+| `[proxy]` | HTTP proxy config |
+| `[identity]` | Agent identity / project context |
+| `[cost]` | Cost tracking and per-day caps |
+| `[peripherals]` | Hardware peripherals |
+| `[[agents]]` | Multi-agent configurations |
+| `[gateway_agents]` | Per-gateway agent routing |
+| `[hardware]` | Hardware discovery |
+| `[mcp_servers]` | MCP server specs (table of named entries) |
+| `[security.sandbox]` | Sandbox enabled, backend selection |
+| `[security.resources]` | Subprocess resource limits |
+
+## Channel config blocks
+
+Each enabled channel gets its own `[channels.<slug>]` block. See [Reference → Channels](/docs/reference/channels) for per-channel allowlist key names.
+
+## Env var prefix
+
+All env vars use the `RANTAICLAW_*` prefix. Common ones:
+
+| Env var | Effect |
+|---|---|
+| `RANTAICLAW_CONFIG_DIR` | Override config directory |
+| `RANTAICLAW_WORKSPACE` | Override workspace |
+| `RANTAICLAW_PROFILE` | Active profile |
+| `RANTAICLAW_PROVIDER` | Default provider |
+| `RANTAICLAW_API_KEY` | Provider API key |
+| `RANTAICLAW_MODEL` | Default model |
+| `RANTAICLAW_ALLOW_PUBLIC_BIND` | Permit non-loopback gateway bind |
+| `RANTAICLAW_GOOGLE_CLIENT_ID` / `_SECRET` | OAuth flows for Google MCP servers |
+| `RANTAICLAW_OPEN_SKILLS_DIR` | Override open-skills path |
+
+Some legacy bare names (`API_KEY`, `MODEL`, `PROVIDER`, `HOST`, `PORT`, `HTTP_PROXY`) are honored as fallbacks.
+
+## Merge order
+
+```
+config.toml
+  → config.runtime.toml         (planned — loader exists but not yet called)
+    → RANTAICLAW_* env vars     (highest precedence, except where legacy bare names override)
+```
+
+## Exporting the schema
+
+The `Config` struct uses `schemars` derive to produce JSON Schema:
+
+```bash
+rantaiclaw config schema --json > rantaiclaw.schema.json
+```
+
+That's the source of truth for any future doc-generation pipeline.

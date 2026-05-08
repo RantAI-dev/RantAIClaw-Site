@@ -1,0 +1,151 @@
+---
+title: Autonomy Levels
+description: How RantAIClaw decides whether to run a tool call automatically, ask the human, or block it. Two layers — runtime enum and onboarding presets.
+---
+
+# Autonomy Levels
+
+Autonomy in RantAIClaw is **two layers** that the docs sometimes conflate. Knowing the difference will save you a lot of confusion when you read config files or audit logs.
+
+| Layer | What it is | Where it lives |
+|---|---|---|
+| **Runtime enum** | Three states the approval gate actually branches on at execution time | `[autonomy].level` in config + `AutonomyLevel` enum in code |
+| **L1–L4 presets** | Four named bundles of autonomy + command allowlist + forbidden paths that the onboarding wizard writes to disk | `<profile>/policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` |
+
+The presets *write* values into the runtime enum (and other files) when you pick one. After that, the runtime only sees the enum + lists.
+
+## The runtime layer — three states
+
+`AutonomyLevel` (`src/security/policy.rs`) has three values. Serde-lowercased:
+
+| Value | What it does |
+|---|---|
+| `read_only` | Only read-shaped tools auto-approve. Writes and shell prompt for approval. |
+| `supervised` | Default. Tools listed in `[autonomy].auto_approve` auto-approve; everything else prompts. |
+| `full` | Skips auto-approve list; runs tools without prompting — but **still respects forbidden paths and `block_high_risk_commands`** (default `true`). |
+
+Two important properties of the runtime enum:
+
+- **Forbidden paths and `forbidden_commands` are non-negotiable across all three states.** Even `full` cannot bypass them — that's enforced in code (`policy.rs`), not policy.
+- **`block_high_risk_commands` defaults to `true`.** So `full` still blocks commands like `rm`, `sudo`, `curl`, `wget`, `ssh`, `chmod`, `mkfs`, `iptables`, `mount` unless that flag is explicitly set to `false`.
+
+## Per-tool gating
+
+Inside `[autonomy]`, two list keys decide which named tools auto-approve or always prompt:
+
+```toml
+[autonomy]
+level = "supervised"
+auto_approve = ["file_read", "memory_recall"]
+always_ask = []
+workspace_only = true
+max_actions_per_hour = 20
+max_cost_per_day_cents = 500
+```
+
+Defaults:
+
+- `auto_approve = ["file_read", "memory_recall"]` — exactly two tools auto-approve by default.
+- `max_actions_per_hour = 20`
+- `max_cost_per_day_cents = 500`
+- `forbidden_paths` includes `/home`, `/tmp`, `/var`, `~/.config`, `~/.aws`, etc. — only `workspace_dir` is reachable when `workspace_only = true`.
+
+There is **no** `[autonomy.overrides]` block with glob keys. Per-command shape rules live in a separate file documented below.
+
+## Command allowlist (separate file)
+
+For `shell` specifically, command-shape decisions are driven by `<profile>/policy/command_allowlist.toml`:
+
+```toml
+[command_allowlist]
+patterns = [
+  "git status",
+  "git log *",
+  "ls *",
+  "cat *",
+  "cargo test *",
+]
+```
+
+Patterns are quote-aware globs over the command string. A request to run `cargo test --lib` matches `"cargo test *"` and auto-approves; a request to run `cargo publish` does not match and prompts (or denies under `read_only`).
+
+The runtime parses commands with defense-in-depth: subshells (`` ` ``, `$(`, `${`, `<(`, `>(`), output redirects (`>`, `>>`), `tee`, single-`&`, `find -exec/-ok`, `git config/alias/-c`, and env-var prefixes (`FOO=bar cmd`) are all blocked or stripped before allowlist matching.
+
+## Risk classification
+
+Independently of allowlists, every shell invocation is classified:
+
+| Risk | Examples |
+|---|---|
+| **High** | `rm`, `sudo`, `curl`, `wget`, `ssh`, `chmod`, `mkfs`, `iptables`, `mount` |
+| **Medium** | `git commit/push/reset/...`, `npm install`, `cargo add`, `touch`, `mv`, `cp` |
+| **Low** | Everything else |
+
+When `block_high_risk_commands = true` (default), high-risk commands are denied even under `full` autonomy.
+
+## The onboarding presets — L1, L2, L3, L4
+
+When you run `rantaiclaw setup` or `rantaiclaw onboard`, the wizard offers four named presets. Picking one writes a bundle of files to `<profile>/policy/`:
+
+| Preset | What it writes |
+|---|---|
+| **L1 — Manual** | `level = "supervised"`, narrow `auto_approve`, strict allowlist, conservative forbidden_paths, `timeout_secs = 60` |
+| **L2 — Smart** | `level = "supervised"`, broader `auto_approve` for read tools and a curated set of shell command patterns (`ls`, `cat *`, `git status`, `web_search *`, `file_read *`, etc.), `timeout_secs = 60` |
+| **L3 — Strict** | `mode = "strict"`, deny-by-default, allows L2 read set + `memory_write *`, `skill_install *`, `cron_*`, `session_*`, `timeout_secs = 0` |
+| **L4 — Off** | `mode = "off"`, minimal forbidden list (still non-empty per spec), runtime `level = "full"` |
+
+Important: **the L1–L4 names are presets, not runtime states.** The onboarding wizard uses them to write a configuration; once the runtime is loaded, it only sees the three-value enum + the list-shaped policy files.
+
+A subtle consequence: if you hand-edit `[autonomy].level` after onboarding, you've changed the runtime behavior but the preset name on disk no longer reflects what's running. The presets are a starting point, not a state.
+
+## What approval prompts look like in practice
+
+Approval flow depends on the originating channel:
+
+- **CLI channel** — interactive `stdin.read_line` prompt. The prompt blocks until the user types `y`/`yes`/`approve` or `n`/`no`/`deny`. **There is no timeout on this prompt today** — `timeout_secs` is written to the policy file but no consumer reads it. If the user never responds, the tool call hangs.
+- **Non-CLI channels** — the dispatcher hard-codes a static deny (`ApprovalResponse::No`). There is no remote approval flow. Tools that the LLM tries to call from Discord, Telegram, etc., are denied unless `auto_approve` covers them.
+
+Plan accordingly: if you want a tool to be callable from Slack, it must be in `auto_approve` (or covered by the `command_allowlist` for shell).
+
+## The audit log
+
+Every approval decision goes to `<profile>/audit.log` (JSONL, append-only). Schema:
+
+```json
+{
+  "timestamp": "2026-05-08T13:42:11.337Z",
+  "event_id": "<uuid-v4>",
+  "event_type": "command_execution",
+  "actor": { "channel": "cli", "user_id": "...", "username": "..." },
+  "action": { "command": "cargo test --lib", "risk_level": "low", "approved": true, "allowed": true },
+  "result": { "success": true, "exit_code": 0, "duration_ms": 4421, "error": null },
+  "security": { "policy_violation": false, "rate_limit_remaining": 19, "sandbox_backend": "landlock" }
+}
+```
+
+Event types: `command_execution`, `file_access`, `config_change`, `auth_success`, `auth_failure`, `policy_violation`, `security_event`.
+
+The log rotates when it reaches `max_size_mb` (default 100), creating `audit.log.1.log`, `.2.log`, … up to `.10.log`.
+
+> **Caveat:** the audit serializer does **not** currently apply secret redaction to the `command` field — the `redact()` helper exists in `src/security/mod.rs` but is not wired into audit serialization. HMAC signing of audit events is also not implemented (the `sign_events` config flag is unused).
+
+## What is *not* relaxed by autonomy
+
+Some boundaries are unconditional and not affected by which level / preset is active:
+
+- forbidden paths
+- `block_high_risk_commands` (when `true`)
+- TLS verification on outbound calls
+- gateway's `allow_public_bind` requirement
+- channel allowlists (per-channel `allowed_*` keys — see [Channels](/docs/concepts/channels-and-providers))
+
+Relaxing any of these requires editing the specific config field. The autonomy knob is not a backdoor.
+
+## Reading the code
+
+- `src/security/policy.rs` — `AutonomyLevel` enum, command parser, risk classifier, forbidden_path enforcement
+- `src/approval/mod.rs` — CLI prompt, session-scoped "Always" allowlist
+- `src/approval/policy_writer.rs` — emits the L1–L4 preset files
+- `src/approval/presets/policy_l*.toml` — the actual preset bundles
+- `src/security/audit.rs` — append-only audit log writer + rotation
+- `src/config/schema.rs` — `[autonomy]` config fields and defaults

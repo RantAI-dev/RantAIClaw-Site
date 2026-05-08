@@ -1,0 +1,122 @@
+---
+title: MCP Servers
+description: Process-level supervision of Model Context Protocol servers. Today's runtime spawns and restarts MCP servers but does not yet integrate their tools with the agent loop.
+---
+
+# MCP Servers
+
+[Model Context Protocol](https://modelcontextprotocol.io) (MCP) is a standard JSON-RPC interface that lets an LLM talk to external services through a uniform contract. RantAIClaw has an MCP **process supervisor** — it can spawn, watch, and restart MCP servers as child processes inside the agent's process tree.
+
+This page is honest about what's wired today vs. what's stubbed:
+
+| Feature | Status today |
+|---|---|
+| Spawn / supervise / restart MCP child processes | ✅ Implemented |
+| Validate `initialize` handshake during interactive setup (`rantaiclaw setup mcp`, `rantaiclaw onboard`) | ✅ Implemented |
+| OAuth flow for MCP credentials (Google Drive, Calendar, Gmail) | ✅ Implemented |
+| Register MCP-server tools with the agent so the LLM can call them | ❌ Not implemented |
+| Run runtime `initialize` handshake on supervisor restart | ❌ Not implemented |
+| `rantaiclaw mcp` top-level CLI | ❌ Does not exist |
+| `GET /mcp/servers` HTTP endpoint | ❌ Does not exist (real route is `GET /config/mcp-servers`, but that's also unmounted today) |
+| Prometheus metrics named `rantaiclaw_mcp_*` | ❌ None registered |
+
+If you're reading documentation that describes "your agent automatically calls GitHub MCP server tools" — that's a design intent, not the current behavior. Today the supervisor keeps MCP processes alive; consumption by the agent loop is a future PR.
+
+## What's actually wired
+
+### Supervision
+
+The supervisor (`src/mcp/supervisor.rs`) polls every 5 seconds (`SUPERVISOR_POLL_INTERVAL`). For each declared server:
+
+1. Spawn via `tokio::process::Command` with stdio piped, `kill_on_drop(true)`.
+2. Watch the child via `try_wait`.
+3. On exit, restart with **exponential backoff**:
+   - `BACKOFF_BASE = 1s`, `BACKOFF_CAP = 60s`
+   - delay = `1 * 2^(consecutive_failures - 1)`, capped at 60s
+   - `MAX_CONSECUTIVE_FAILURES = 5`
+4. After 5 consecutive failures, the server is marked permanently failed.
+
+In practice the actual delay sequence is **1s, 2s, 4s, 8s, 16s** — then permanent failure. The 60s cap is never reached at this max-attempts setting. (The module's doc comment claims `…32s, 60s` but the loop terminates first; the implementation governs.)
+
+There is a hard cap of `MAX_MCP_SERVERS = 10` in `src/mcp/mod.rs` — adding an 11th is rejected.
+
+### Configuration
+
+```toml
+[mcp_servers.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "${GITHUB_PAT}" }
+
+[mcp_servers.notion]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-notion"]
+env = { NOTION_TOKEN = "${NOTION_TOKEN}" }
+```
+
+Each entry becomes a supervised child process. The supervisor never speaks JSON-RPC at runtime — it only manages the process lifecycle.
+
+### Doctor check
+
+`rantaiclaw doctor` runs `McpStartupCheck` for each configured server (`src/doctor/checks/mcp.rs`):
+
+- It calls `which::which(&srv.command)` to verify the launcher binary is on `PATH`.
+- It does **not** spawn the server.
+- It does **not** run an `initialize` handshake.
+
+If the launcher exists, the check passes. The full handshake is exercised only during interactive setup.
+
+### Setup-time validation
+
+When you run `rantaiclaw setup mcp` or pick MCP servers in `rantaiclaw onboard`, the wizard (`src/mcp/setup.rs`):
+
+1. Spawns the configured server.
+2. Sends an MCP `initialize` JSON-RPC request.
+3. Waits for the capabilities response (5s timeout — `VALIDATE_TIMEOUT`).
+4. Tears down the spawn.
+
+If the handshake succeeds, the server is added to the config; if not, the wizard reports the error and lets you skip or retry.
+
+### OAuth flow
+
+For services that need OAuth (currently **Google Drive**, **Google Calendar**, **Gmail**), `src/mcp/oauth.rs` implements:
+
+1. Open the user's default browser via `webbrowser::open` to the OAuth consent URL.
+2. Run a local HTTP listener on fixed port `11500` (300s timeout).
+3. Exchange the authorization code for tokens via the configured `token_url`.
+4. Write tokens to `<profile>/secrets/api_keys.toml` (mode 0600 on Unix).
+
+This requires `RANTAICLAW_GOOGLE_CLIENT_ID` and `RANTAICLAW_GOOGLE_CLIENT_SECRET` to be set in the environment when the wizard runs.
+
+The token store at `<profile>/secrets/api_keys.toml` is a **plain TOML file** with mode 0600 — not the AEAD-encrypted secret store used for inline `enc2:` values in `config.toml`.
+
+OAuth only runs from the interactive wizards (`setup mcp`, `onboard`). There is no `rantaiclaw mcp oauth <name>` command.
+
+## What's not wired (yet)
+
+These are honest gaps you should know about:
+
+- **Runtime handshake.** The supervisor never sends `initialize` after a restart — only at setup time. So if a server's protocol negotiation fails post-restart, the supervisor will keep restarting it without surfacing the protocol error.
+- **Tool registration.** There is no MCP-tool integration in `src/tools/` or `src/agent/`. The agent loop has no awareness of an MCP server's tool set. The dot-prefixed naming convention (`github.create_issue` etc.) is not implemented for MCP.
+- **Resource subscription, sampling, log forwarding.** None of these MCP advanced features are implemented — there is no JSON-RPC client at runtime at all.
+- **`rantaiclaw mcp` CLI.** No top-level `mcp` command. MCP work happens via `rantaiclaw setup mcp` and `rantaiclaw onboard`.
+- **Metrics.** No `rantaiclaw_mcp_*` Prometheus metrics. Generic counters (`rantaiclaw_tool_calls_total`, `rantaiclaw_errors_total`, etc.) cover MCP indirectly only when MCP-driven tools eventually become visible to the tool registry.
+- **`/mcp/servers` HTTP endpoint.** Doesn't exist. The closest planned endpoint is `GET /config/mcp-servers` in `src/gateway/config_api.rs`, but that file isn't mounted on the router (see [Gateway](/docs/concepts/gateway)).
+
+## Trust and security
+
+Even with the limitations above, MCP servers run **inside the agent's process tree with the agent's permissions**. They can read files, make network calls, and persist state, bounded only by the runtime's sandbox if any.
+
+When tool integration ships, MCP tools will be subject to the [approval gate](/docs/concepts/autonomy-levels) like any other tool. Until then, MCP servers run as side-channel processes — they don't directly affect agent behavior, but anything they do (filesystem writes, network calls) does.
+
+Treat MCP servers like dependencies you ship. Pin versions, prefer well-maintained official servers, audit what they can do.
+
+## Reading the code
+
+- `src/mcp/mod.rs` — registry and `MAX_MCP_SERVERS = 10`
+- `src/mcp/handle.rs` — child process management (`tokio::process::Command`, kill_on_drop, try_wait)
+- `src/mcp/supervisor.rs` — restart loop with exponential backoff
+- `src/mcp/setup.rs` — interactive validation and `initialize` handshake (5s timeout)
+- `src/mcp/oauth.rs` — OAuth flow for Google services
+- `src/mcp/curated.rs` — the in-tree list of supported MCP servers shown in the wizard
+- `src/doctor/checks/mcp.rs` — the (PATH-only) doctor check
