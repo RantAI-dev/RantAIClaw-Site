@@ -7,6 +7,7 @@ import { MenuIcon, XIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { withBase } from "@/lib/path"
 
 const navItems = [
   { href: "/docs", label: "Docs" },
@@ -42,7 +43,7 @@ export function LandingNavbar() {
             aria-label="RantAIClaw home"
           >
             <Image
-              src="/logo.png"
+              src={withBase("/logo.png")}
               alt=""
               width={32}
               height={32}
