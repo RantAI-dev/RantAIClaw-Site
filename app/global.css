@@ -118,6 +118,9 @@
 }
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+  }
   /* Scope shadcn base styles to the landing tree so they don't bleed into Nextra docs */
   .landing-root {
     @apply bg-background text-foreground;

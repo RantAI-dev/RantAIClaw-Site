@@ -45,13 +45,16 @@ const features = [
     icon: Plug,
     title: "Skills + MCP",
     description:
-      "Install community skills from ClawHub, auto-sync open-skills every 7 days, supervise MCP servers as child processes with exponential-backoff restart.",
+      "Install skills from the library, auto-sync every 7 days, supervise MCP servers as child processes with exponential-backoff restart.",
   },
 ]
 
 export function Features() {
   return (
-    <section className="relative bg-background px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+    <section
+      id="features"
+      className="relative scroll-mt-16 bg-background px-4 py-24 sm:px-6 lg:px-8 lg:py-32"
+    >
       <div className="mx-auto max-w-7xl">
         <MotionInView className="mb-16 max-w-3xl">
           <div className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">

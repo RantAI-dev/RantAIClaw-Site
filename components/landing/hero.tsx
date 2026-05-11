@@ -123,10 +123,12 @@ export function Hero() {
           {...fadeInUp}
           transition={{ ...transition, delay: 0.36 }}
         >
-          A multi-agent runtime that listens, thinks, and replies across{" "}
+          A multi-agent runtime with a{" "}
+          <span className="text-foreground">built-in TUI</span> that listens,
+          thinks, and replies across{" "}
           <span className="text-foreground">{CHANNELS.length}+ channels</span>{" "}
           from a single ~12&nbsp;MB binary. Sub-200ms cold start. ~15&nbsp;MB
-          idle. Per-profile isolation. ClawHub-compatible skills.
+          idle. Per-profile isolation.
         </motion.p>
 
         <motion.div

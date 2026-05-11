@@ -1,4 +1,5 @@
 import { Hero } from "@/components/landing/hero"
+import { Tui } from "@/components/landing/tui"
 import { Features } from "@/components/landing/features"
 import { Stats } from "@/components/landing/stats"
 import { HowItWorks } from "@/components/landing/how-it-works"
@@ -9,6 +10,7 @@ export default function HomePage() {
   return (
     <>
       <Hero />
+      <Tui />
       <Features />
       <Stats />
       <HowItWorks />

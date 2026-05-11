@@ -6,7 +6,10 @@ import { MotionInView } from "@/components/landing/motion-in-view"
 
 export function Install() {
   return (
-    <section className="relative bg-muted/30 px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
+    <section
+      id="install"
+      className="relative scroll-mt-16 bg-muted/30 px-4 py-24 sm:px-6 lg:px-8 lg:py-32"
+    >
       <div className="mx-auto max-w-5xl">
         <MotionInView className="mb-12 max-w-3xl">
           <div className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">

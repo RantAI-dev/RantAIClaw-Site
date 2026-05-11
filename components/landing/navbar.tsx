@@ -10,10 +10,10 @@ import { cn } from "@/lib/utils"
 import { withBase } from "@/lib/path"
 
 const navItems = [
-  { href: "/docs", label: "Docs" },
-  { href: "/docs/getting-started", label: "Quickstart" },
-  { href: "/docs/concepts/architecture", label: "Concepts" },
-  { href: "https://clawhub.ai", label: "ClawHub", external: true },
+  { href: "#tui", label: "TUI" },
+  { href: "#features", label: "Features" },
+  { href: "#how-it-works", label: "How it works" },
+  { href: "#install", label: "Install" },
 ]
 
 export function LandingNavbar() {
@@ -55,16 +55,13 @@ export function LandingNavbar() {
 
           <nav className="hidden items-center gap-6 text-muted-foreground md:flex">
             {navItems.map((item) => (
-              <Link
+              <a
                 key={item.href}
                 href={item.href}
-                {...(item.external
-                  ? { target: "_blank", rel: "noreferrer" }
-                  : {})}
                 className="font-mono text-sm uppercase transition-colors hover:text-foreground"
               >
                 {item.label}
-              </Link>
+              </a>
             ))}
           </nav>
 
@@ -114,17 +111,14 @@ export function LandingNavbar() {
           <nav className="border-t border-border bg-background/95 px-4 py-3 backdrop-blur md:hidden">
             <div className="flex flex-col gap-2">
               {navItems.map((item) => (
-                <Link
+                <a
                   key={item.href}
                   href={item.href}
-                  {...(item.external
-                    ? { target: "_blank", rel: "noreferrer" }
-                    : {})}
                   onClick={() => setMobileOpen(false)}
                   className="px-3 py-2 font-mono text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                   {item.label}
-                </Link>
+                </a>
               ))}
               <Button asChild size="sm" className="mt-2">
                 <Link href="/docs">Read the Docs</Link>

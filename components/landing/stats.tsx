@@ -14,7 +14,10 @@ const stats = [
 
 export function Stats() {
   return (
-    <section className="relative bg-muted/30 px-4 py-24 sm:px-6 lg:px-8">
+    <section
+      id="stats"
+      className="relative scroll-mt-16 bg-muted/30 px-4 py-24 sm:px-6 lg:px-8"
+    >
       <div className="mx-auto max-w-7xl">
         <MotionInView className="mb-12 max-w-3xl">
           <div className="mb-3 font-mono text-xs uppercase tracking-wider text-muted-foreground">

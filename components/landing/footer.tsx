@@ -105,16 +105,6 @@ export function LandingFooter() {
                 </li>
                 <li>
                   <a
-                    href="https://clawhub.ai"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-foreground/80 hover:text-foreground"
-                  >
-                    ClawHub Skills
-                  </a>
-                </li>
-                <li>
-                  <a
                     href="https://github.com/RantAI-dev/RantAIClaw/issues"
                     target="_blank"
                     rel="noreferrer"
