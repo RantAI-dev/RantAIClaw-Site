@@ -192,7 +192,7 @@ export function LandingFooter() {
                 className="font-mono text-xs text-muted-foreground"
                 suppressHydrationWarning
               >
-                &copy; {new Date().getFullYear()} RantAI. Apache 2.0 licensed.
+                &copy; {new Date().getFullYear()} RantAI. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
               </div>
             </div>
 
