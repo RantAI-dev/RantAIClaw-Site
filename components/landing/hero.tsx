@@ -105,13 +105,16 @@ export function Hero() {
                   animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
                   exit={{ y: -24, opacity: 0, filter: "blur(8px)" }}
                   transition={{ duration: 0.35, ease: "easeOut" }}
-                  className="inline-block bg-linear-to-r from-[#5EB6FA] to-[#a8d4ff] bg-clip-text text-transparent"
+                  className="inline-block bg-linear-to-r from-[#5EB6FA] to-[#a8d4ff] bg-clip-text pb-[0.18em] text-transparent"
                 >
                   {CHANNELS[channelIndex]}.
                 </motion.span>
               </AnimatePresence>
               {/* invisible sizer so layout doesn't jump as words change width */}
-              <span className="invisible whitespace-nowrap" aria-hidden>
+              <span
+                className="invisible inline-block whitespace-nowrap pb-[0.18em]"
+                aria-hidden
+              >
                 {CHANNELS.reduce((a, b) => (b.length > a.length ? b : a))}.
               </span>
             </span>
