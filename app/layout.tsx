@@ -1,41 +1,25 @@
 import type { Metadata } from 'next'
-import { Footer, Layout, Navbar } from 'nextra-theme-docs'
 import { Head } from 'nextra/components'
-import { getPageMap } from 'nextra/page-map'
 import './global.css'
-import config from '../theme.config'
 
 export const metadata: Metadata = {
   title: {
-    default: 'RantAIClaw Documentation',
-    template: '%s | RantAIClaw Docs',
+    default: 'RantAIClaw',
+    template: '%s | RantAIClaw',
   },
   description:
-    'Documentation for RantAIClaw — Rust-based agent framework for building autonomous AI employees with tools, skills, services, and webhook gateways.',
+    'Production multi-agent runtime in 100% Rust. Cold start under 200ms, multi-channel, multi-provider, ClawHub-compatible.',
 }
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const pageMap = await getPageMap('/docs')
-
   return (
     <html lang="en" dir="ltr" suppressHydrationWarning>
       <Head />
-      <body>
-        <Layout
-          navbar={<Navbar logo={config.logo} projectLink={config.project?.link} />}
-          footer={<Footer>{config.footer?.content}</Footer>}
-          docsRepositoryBase={config.docsRepositoryBase}
-          sidebar={config.sidebar}
-          toc={config.toc}
-          pageMap={pageMap}
-        >
-          {children}
-        </Layout>
-      </body>
+      <body>{children}</body>
     </html>
   )
 }

@@ -17,9 +17,10 @@ export default async function Page(props: {
   params: Promise<{ mdxPath?: string[] }>
 }) {
   const params = await props.params
-  const { default: MDXContent, toc, metadata } = await importPage(params.mdxPath)
+  const result = await importPage(params.mdxPath)
+  const { default: MDXContent, ...rest } = result
   return (
-    <Wrapper toc={toc} metadata={metadata}>
+    <Wrapper {...rest}>
       <MDXContent />
     </Wrapper>
   )
