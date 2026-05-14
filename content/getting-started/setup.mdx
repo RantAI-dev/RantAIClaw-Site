@@ -18,7 +18,7 @@ For a step-by-step walk-through, see [Your First Agent](/docs/getting-started/fi
 | Section | When to use it | What it writes |
 |---|---|---|
 | **provider** | First-time or switching LLM provider | `default_provider`, `default_model`, encrypted `api_key` in `config.toml` |
-| **approvals** | Tightening or loosening autonomy | `policy/autonomy.toml` (L1-L4 preset), `policy/command_allowlist.toml`, `policy/forbidden_paths.toml` |
+| **approvals** | Tightening or loosening autonomy | `policy/autonomy.toml` (Manual / Smart / Strict / Off preset), `policy/command_allowlist.toml`, `policy/forbidden_paths.toml` |
 | **channels** | Adding Telegram / Discord / Slack / WhatsApp / etc. | `[channels_config.<name>]` block per channel + encrypted bot tokens |
 | **persona** | Picking the agent's tone/role | `persona/SYSTEM.md` with templated content |
 | **skills** | Bundled starter pack + ClawHub discovery | Skills in `skills/<name>/SKILL.md` + `[skills.entries.<name>]` config |

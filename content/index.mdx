@@ -33,7 +33,7 @@ No garbage collector. No runtime overhead. Just async Rust on `tokio`.
 - **ClawHub + open-skills.** Install community skills from [ClawHub](https://clawhub.ai), or auto-sync the open-skills repo (`besoeasy/open-skills`) every 7 days for a shared baseline.
 - **MCP supervision.** Spawn and restart Model Context Protocol servers as supervised child processes (runtime tool integration is in-progress — see [MCP Servers](/docs/concepts/mcp)).
 - **Agentic tools.** 20+ built-in tools (`shell`, `file_read`, `file_write`, `glob_search`, `cron_*`, `memory_*`, `web_search_tool`, `git_operations`, `pdf_read`, `screenshot`, `image_info`, etc.) with security boundaries.
-- **Three-level autonomy + four onboarding presets.** Runtime states `read_only` / `supervised` / `full`, configured via L1–L4 preset bundles that write `autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` to disk.
+- **Three-level autonomy + four onboarding presets.** Runtime states `read_only` / `supervised` / `full`, configured via Manual / Smart / Strict / Off preset bundles that write `autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` to disk.
 - **Five memory backends.** SQLite (default), Lucid (sqlite + workspace markdown overlay — RantAIClaw-only), Markdown, PostgreSQL, none. Hybrid lexical + vector recall, soul-snapshot for cold-boot survival.
 - **Sandbox auto-detection.** Landlock (Linux) → Firejail → Bubblewrap → Docker → Noop, picked at runtime based on what the host supports.
 - **AEAD secret store.** ChaCha20-Poly1305, master key at `~/.rantaiclaw/.secret_key`, ciphertext stored inline in `config.toml` as `enc2:<hex>`.

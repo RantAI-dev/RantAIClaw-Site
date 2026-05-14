@@ -10,7 +10,7 @@ Autonomy in RantAIClaw is **two layers** that the docs sometimes conflate. Knowi
 | Layer | What it is | Where it lives |
 |---|---|---|
 | **Runtime enum** | Three states the approval gate actually branches on at execution time | `[autonomy].level` in config + `AutonomyLevel` enum in code |
-| **L1–L4 presets** | Four named bundles of autonomy + command allowlist + forbidden paths that the onboarding wizard writes to disk | `<profile>/policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` |
+| **Onboarding presets** | Four named bundles (Manual / Smart / Strict / Off) of autonomy + command allowlist + forbidden paths that the onboarding wizard writes to disk | `<profile>/policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` |
 
 The presets *write* values into the runtime enum (and other files) when you pick one. After that, the runtime only sees the enum + lists.
 
@@ -83,20 +83,22 @@ Independently of allowlists, every shell invocation is classified:
 
 When `block_high_risk_commands = true` (default), high-risk commands are denied even under `full` autonomy.
 
-## The onboarding presets — L1, L2, L3, L4
+## The onboarding presets — Manual, Smart, Strict, Off
 
 When you run `rantaiclaw setup` or `rantaiclaw onboard`, the wizard offers four named presets. Picking one writes a bundle of files to `<profile>/policy/`:
 
 | Preset | What it writes |
 |---|---|
-| **L1 — Manual** | `level = "supervised"`, narrow `auto_approve`, strict allowlist, conservative forbidden_paths, `timeout_secs = 60` |
-| **L2 — Smart** | `level = "supervised"`, broader `auto_approve` for read tools and a curated set of shell command patterns (`ls`, `cat *`, `git status`, `web_search *`, `file_read *`, etc.), `timeout_secs = 60` |
-| **L3 — Strict** | `mode = "strict"`, deny-by-default, allows L2 read set + `memory_write *`, `skill_install *`, `cron_*`, `session_*`, `timeout_secs = 0` |
-| **L4 — Off** | `mode = "off"`, minimal forbidden list (still non-empty per spec), runtime `level = "full"` |
+| **Manual** | `level = "supervised"`, narrow `auto_approve`, strict allowlist, conservative forbidden_paths, `timeout_secs = 60` |
+| **Smart** | `level = "supervised"`, broader `auto_approve` for read tools and a curated set of shell command patterns (`ls`, `cat *`, `git status`, `web_search *`, `file_read *`, etc.), `timeout_secs = 60` |
+| **Strict** | `mode = "strict"`, deny-by-default, allows the Smart read set + `memory_write *`, `skill_install *`, `cron_*`, `session_*`, `timeout_secs = 0` |
+| **Off** | `mode = "off"`, minimal forbidden list (still non-empty per spec), runtime `level = "full"` |
 
-Important: **the L1–L4 names are presets, not runtime states.** The onboarding wizard uses them to write a configuration; once the runtime is loaded, it only sees the three-value enum + the list-shaped policy files.
+Important: **the preset names are setup-time choices, not runtime states.** The onboarding wizard uses them to write a configuration; once the runtime is loaded, it only sees the three-value enum + the list-shaped policy files.
 
 A subtle consequence: if you hand-edit `[autonomy].level` after onboarding, you've changed the runtime behavior but the preset name on disk no longer reflects what's running. The presets are a starting point, not a state.
+
+> **Legacy note.** Releases before v0.6.40 labelled these presets `L1` / `L2` / `L3` / `L4`. The on-disk identifiers were renamed to `manual` / `smart` / `strict` / `off` in v0.6.40-alpha; old `preset = "L1"` style values in existing `autonomy.toml` files still load — the writer accepts both spellings.
 
 ## What approval prompts look like in practice
 
@@ -167,7 +169,7 @@ Relaxing any of these requires editing the specific config field. The autonomy k
 
 - `src/security/policy.rs` — `AutonomyLevel` enum, command parser, risk classifier, forbidden_path enforcement
 - `src/approval/mod.rs` — CLI prompt, session-scoped "Always" allowlist
-- `src/approval/policy_writer.rs` — emits the L1–L4 preset files
-- `src/approval/presets/policy_l*.toml` — the actual preset bundles
+- `src/approval/policy_writer.rs` — emits the named preset files
+- `src/approval/presets/policy_{manual,smart,strict,off}.toml` — the actual preset bundles
 - `src/security/audit.rs` — append-only audit log writer + rotation
 - `src/config/schema.rs` — `[autonomy]` config fields and defaults

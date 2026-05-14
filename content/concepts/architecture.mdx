@@ -31,7 +31,7 @@ The actual `src/` tree is broader than the seven traits would suggest. The full 
 | Subsystem | Owns |
 |---|---|
 | `agent/` | Orchestration loop, persona application, tool dispatch, memory loader |
-| `approval/` | Approval gate (CLI prompt, session-scoped allowlist), L1–L4 preset writer |
+| `approval/` | Approval gate (CLI prompt, session-scoped allowlist), Manual / Smart / Strict / Off preset writer |
 | `auth/` | Auth flows for providers — OAuth, OpenAI Codex device-code, Anthropic subscription tokens |
 | `channels/` | Per-channel transport, allowlist enforcement |
 | `config/` | Schema, load/merge, runtime overrides (planned), JSON Schema export |
@@ -115,7 +115,7 @@ Breaking either requires explicit justification.
 
 - [Profiles](/docs/concepts/profiles) — the per-profile workspace under `~/.rantaiclaw/profiles/<name>/`
 - [Agent Loop](/docs/concepts/agent-loop) — what happens between message arriving and reply going out
-- [Autonomy Levels](/docs/concepts/autonomy-levels) — the 3-level runtime enum and L1–L4 preset bundles
+- [Autonomy Levels](/docs/concepts/autonomy-levels) — the 3-level runtime enum and the Manual / Smart / Strict / Off preset bundles
 - [Channels & Providers](/docs/concepts/channels-and-providers) — the two largest extension surfaces
 - [Tools & Skills](/docs/concepts/tools-and-skills) — how the agent acts on the world
 - [Security Model](/docs/concepts/security) — the deny-by-default boundaries

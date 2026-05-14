@@ -34,12 +34,12 @@ Choose how much human-in-the-loop oversight tool calls require. The wizard offer
 
 | Preset | What it writes |
 |---|---|
-| **L1 — Manual** | Narrow auto-approve list, strict command allowlist; almost everything prompts |
-| **L2 — Smart** | Curated auto-approve list (read tools + safe shell patterns like `ls *`, `cat *`, `git status`) |
-| **L3 — Strict** | Deny-by-default, allows only the L2 read set + memory writes + skill installs + cron / session ops |
-| **L4 — Off** | Runtime `level = "full"`; auto-approves everything except forbidden paths and high-risk commands |
+| **Manual** | Narrow auto-approve list, strict command allowlist; almost everything prompts |
+| **Smart** | Curated auto-approve list (read tools + safe shell patterns like `ls *`, `cat *`, `git status`) |
+| **Strict** | Deny-by-default, allows only the Smart read set + memory writes + skill installs + cron / session ops |
+| **Off** | Runtime `level = "full"`; auto-approves everything except forbidden paths and high-risk commands |
 
-L2 is the recommended starting default. See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full mechanics — the runtime enum has only three values (`read_only`, `supervised`, `full`); the L1–L4 names are preset bundles the wizard writes.
+Smart is the recommended starting default. See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full mechanics — the runtime enum has only three values (`read_only`, `supervised`, `full`); the four preset names are bundles the wizard writes.
 
 ## 3. Channels
 
@@ -125,7 +125,7 @@ All under `~/.rantaiclaw/`:
 | `~/.rantaiclaw/active_profile` | Plain text — name of the active profile |
 | `~/.rantaiclaw/profiles/<name>/config.toml` | Per-profile static config (encrypted secrets stored inline as `enc2:<hex>`) |
 | `~/.rantaiclaw/profiles/<name>/persona/persona.toml` + `SYSTEM.md` | Persona definition |
-| `~/.rantaiclaw/profiles/<name>/policy/autonomy.toml` | Autonomy level + per-tool lists (written by L1–L4 preset selector) |
+| `~/.rantaiclaw/profiles/<name>/policy/autonomy.toml` | Autonomy level + per-tool lists (written by the Manual / Smart / Strict / Off preset selector) |
 | `~/.rantaiclaw/profiles/<name>/policy/command_allowlist.toml` | Quote-aware glob patterns for shell |
 | `~/.rantaiclaw/profiles/<name>/policy/forbidden_paths.toml` | Path blocklist |
 | `~/.rantaiclaw/profiles/<name>/skills/` | Locally installed skills |
