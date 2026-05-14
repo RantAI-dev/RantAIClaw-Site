@@ -100,12 +100,34 @@ A subtle consequence: if you hand-edit `[autonomy].level` after onboarding, you'
 
 ## What approval prompts look like in practice
 
-Approval flow depends on the originating channel:
+Approval flow depends on the originating channel. **As of v0.6.5-alpha all surfaces have a working interactive approval path.**
 
-- **CLI channel** — interactive `stdin.read_line` prompt. The prompt blocks until the user types `y`/`yes`/`approve` or `n`/`no`/`deny`. **There is no timeout on this prompt today** — `timeout_secs` is written to the policy file but no consumer reads it. If the user never responds, the tool call hangs.
-- **Non-CLI channels** — the dispatcher hard-codes a static deny (`ApprovalResponse::No`). There is no remote approval flow. Tools that the LLM tries to call from Discord, Telegram, etc., are denied unless `auto_approve` covers them.
+- **CLI channel** — interactive `stdin.read_line` prompt. Blocks until the user types `y`/`yes`/`approve` or `n`/`no`/`deny`.
+- **TUI** — the agent emits an `🔒 Approval needed: brew (full command: brew --version)` system message in scrollback. User resolves via slash commands:
+  - `/allow brew` — session-only
+  - `/allow brew --persist` — writes to runtime allowlist, survives restart
+  - `/deny brew` — reject
+  - `/allowlist` — see what's currently approved + pending
+  
+  5-minute timeout auto-denies if the user doesn't respond.
 
-Plan accordingly: if you want a tool to be callable from Slack, it must be in `auto_approve` (or covered by the `command_allowlist` for shell).
+- **Chat channels (Telegram / Discord / Slack / WhatsApp / Mattermost / Signal / Email / IRC / DingTalk)** — the agent's "command failed" message surfaces the failure to the user. User replies with an approval token in the same chat. Tokens recognized by `src/channels/approval_relay.rs::try_handle_reply`:
+  - `/allow brew`, `allow brew` — session
+  - `/allow brew --persist`, `allow brew persist`, `allow brew -p` — persist
+  - `/deny brew`, `deny brew` — reject
+  - `y brew` (once), `Y brew` (persist, capital), `n brew` (deny) — single-char shortcuts
+  
+  Parser is strict: chatty messages like "allow brew because I need it" do **not** match (extra tokens past `--persist` are rejected). `find / -name foo` doesn't mistakenly parse as a slash command either.
+
+The third layer above the static `auto_approve` list:
+
+| Layer | What | Persistence |
+|---|---|---|
+| Static allowlist (`[autonomy].allowed_commands`) | Boot-time list, auditable | Config-edit + restart |
+| **Runtime allowlist** (new in v0.6.5) | User-approved at runtime | In-memory or `runtime_allowlist.toml` overlay |
+| Pending approvals | Currently-suspended tool calls awaiting decision | Memory only (lost on restart) |
+
+See [Security Model — Runtime allowlist + async approval](/docs/concepts/security#runtime-allowlist--async-approval-v065) for the full architecture.
 
 ## The audit log
 

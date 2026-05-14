@@ -1,0 +1,146 @@
+---
+title: Slash Commands
+description: Every TUI slash command — what it does, when to use it, what state it leaves behind.
+---
+
+# Slash Commands
+
+The TUI's command surface. Every command starts with `/`; the autocomplete dropdown filters as you type. Skills installed locally also surface as `/<skill-name>` shortcuts that pre-fill `"Use the <name> skill:"` in the input.
+
+## Conversation control
+
+| Command | Purpose | State change |
+|---|---|---|
+| `/new` | Start a fresh session, preserving the active model | `session_id` rotated; messages cleared; model preserved |
+| `/retry` | Re-dispatch the last user message | Drops the last assistant reply; resubmits the preceding user message |
+| `/undo` | Drop the last user + assistant exchange | Removes the last two messages from history |
+| `/continue` | Resubmit conversation with fresh tool-call budget | Pushes a "continue from where you left off" prompt with optional steering: `/continue install missing deps` |
+| `/quit` | Exit cleanly | Persists session, terminates the TUI |
+| `/sessions` | Open the session-resume picker | Picker opens; Enter resumes selected session |
+| `/resume <id>` | Resume a session by id | Loads named session into the live TUI |
+
+## Discovery
+
+| Command | What it opens |
+|---|---|
+| `/help` | Modal overlay listing all slash commands (tabs: general / commands / custom) |
+| `/status` | Inline info panel — model, channels, providers, sandbox, autonomy |
+| `/config` | Config snapshot panel (read-only) |
+| `/doctor` | Run doctor checks inline + render the same output as `rantaiclaw doctor` |
+| `/channels` | Configured channels + auto-start state |
+| `/usage` | Token usage tally for the current session |
+| `/insights` | Conversation-level insights from session data |
+
+## Model + provider
+
+| Command | What it opens |
+|---|---|
+| `/model` | Picker over the active provider's available models |
+
+The status bar (bottom row) shows `$ <provider>:<model>` and updates immediately after a `/model` selection.
+
+## Skills
+
+| Command | What it does |
+|---|---|
+| `/skills` | Interactive picker over local + bundled skills (search, hot-reload aware) |
+| `/skill <name>` | Open the skill's detail panel (description, install-deps status, source path) |
+| `/skill` (no arg) | Same as `/skills` |
+| `/install [query]` | ClawHub install picker; `query` pre-fills the search field |
+| `/personality` | Show / switch active persona |
+
+Skills loaded from disk auto-refresh in the picker when their SKILL.md file changes — and the **agent's tool registry rebuilds** so the new skill is callable from the next turn. See [Skills](/docs/reference/skills) for the loader's gating rules.
+
+`/<skill-name>` direct-invoke: typing `/gog list emails` (when a skill named `gog` exists) pre-fills the input as `Use the gog skill: list emails` — gives one tap on Enter to dispatch.
+
+## Memory
+
+| Command | What it does |
+|---|---|
+| `/memory` | Memory inspection panel |
+| `/forget <key>` | Forget a specific memory entry |
+| `/compress` | Compress the conversation history |
+
+## Setup + maintenance
+
+| Command | What it does |
+|---|---|
+| `/setup` | Top-level setup picker — choose any of 7 sections |
+| `/setup <section>` | Jump into one section directly: `provider`, `approvals`, `channels`, `persona`, `skills`, `mcp`, `memory` |
+
+Wizard close fires a `⟳ config.toml changed — agent reloaded` system message; next turn uses the new settings.
+
+## Security + approvals (v0.6.5+)
+
+| Command | What it does | State change |
+|---|---|---|
+| `/allow <basename>` | Add `<basename>` to the **session** runtime allowlist | In-memory only, lost on restart |
+| `/allow <basename> --persist` (alias `--save`, `-p`) | Add to the **persistent** overlay | Written to `<profile>/policy/runtime_allowlist.toml`, survives restart |
+| `/deny <basename>` | Reject a pending approval | The agent's suspended tool call fails |
+| `/allowlist` | Inspect boot + runtime allowlists + pending requests | Read-only |
+
+When the shell tool hits a basename outside the static `allowed_commands` (in Supervised autonomy), it suspends and emits a system message:
+
+```text
+🔒 Approval needed: brew (full command: brew --version).
+Type one of: /allow brew | /allow brew --persist | /deny brew (auto-deny in 5 min)
+```
+
+Reply with one of the three forms above to resolve. The suspended tool call resumes (`/allow`) or fails (`/deny`) accordingly.
+
+See [Security → Runtime allowlist + async approval](/docs/concepts/security#runtime-allowlist--async-approval-v065) for the full architecture and [Channels → Approval reply protocol](/docs/reference/channels#approval-reply-protocol-v065) for the chat-channel equivalent.
+
+## MCP
+
+| Command | What it does |
+|---|---|
+| `/mcp` | List configured MCP servers + their discovered tools |
+
+Output shape:
+
+```text
+MCP servers (2 configured, 2 live):
+
+▸ filesystem — 14 tools
+    · mcp__filesystem__read_file
+    · mcp__filesystem__write_file
+    [... 12 more ...]
+
+✗ broken_demo — 0 tools
+    (failed to discover — check rantaiclaw logs for connect/handshake errors)
+```
+
+See [MCP Servers](/docs/concepts/mcp) for setup + protocol details.
+
+## Agent debugging (v0.6.5+)
+
+| Command | What it does |
+|---|---|
+| `/calls` | Open overlay showing every tool call from the most recent finished turn (args, results, ✓/✗ markers) |
+
+Useful when an agent run produces an unexpected result — `/calls` shows what was actually executed under the hood without re-running the turn.
+
+If you also want to see the tool log as the turn happens (not just after), the TUI inline-flushes a 1-line summary per tool call to scrollback:
+
+```text
+  ▸ shell(command="which gog") → gog: command not found (12ms)
+  ✗ shell(command="brew --version") → error: Permission denied (3s)
+```
+
+`▸` = success, `✗` = failure, time = wall-clock duration of the call.
+
+## Cron
+
+| Command | What it does |
+|---|---|
+| `/cron list` | List scheduled jobs |
+| `/cron add <spec>` | Add a job |
+| `/cron remove <id>` | Remove |
+| `/cron run <id>` | Run-now |
+| `/cron runs <id>` | History |
+
+## Behavior notes
+
+- **The first token must be a known verb.** Chatty messages like "allow brew because I need it" do **not** trigger `/allow` — they route to the agent as a normal turn. This is intentional to prevent accidental allowlist mutations.
+- **The autocomplete dropdown** appears whenever input starts with `/` and has no space yet. Up/Down/Enter to pick; Tab to complete to the first match.
+- **Stale commands.** If you typed `/skill` (singular) in v0.6.4 — that resolved to a typo. v0.6.5+ accepts `/skill` and `/skills` as siblings; both open the picker.

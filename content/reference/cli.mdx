@@ -62,6 +62,44 @@ You may have seen these documented elsewhere. They **do not exist** as top-level
 | `rantaiclaw secret` | Secrets are managed via `rantaiclaw setup` (encrypted inline as `enc2:<hex>` in `config.toml`) |
 | `rantaiclaw skill` (singular) | The CLI is plural: `rantaiclaw skills` |
 
+## TUI slash commands
+
+The TUI (`rantaiclaw chat`) accepts slash commands inline at the prompt. Full reference at [Slash Commands](/docs/reference/slash-commands); a summary table here:
+
+| Command | Purpose |
+|---|---|
+| `/help` | Modal overlay listing all slash commands |
+| `/quit` | Exit the TUI cleanly |
+| `/new` | Start a fresh session, preserving the active model |
+| `/retry` | Re-run the last user message (drop the assistant reply) |
+| `/undo` | Drop the last user/assistant exchange |
+| `/continue` | Resubmit the conversation with a fresh tool-call budget |
+| `/sessions` | Open the session-resume picker |
+| `/resume <id>` | Resume a session by id |
+| `/model` | Pick a different model from the active provider's catalog |
+| `/usage` | Show token usage for the current session |
+| `/status` | Snapshot of active config (model, debug mode, channels, …) |
+| `/config` | Open config overlay (read-only summary) |
+| `/doctor` | Run doctor checks inline |
+| `/channels` | List configured channels + their state |
+| `/personality` | Show / switch active persona |
+| `/skills` | Skills picker (search, install-deps, view) |
+| `/skill <name>` | Open a specific skill's detail panel |
+| `/install [query]` | ClawHub install picker for new skills |
+| `/insights` | Conversation/session insights |
+| `/memory` | Memory inspection |
+| `/forget <key>` | Forget a specific memory key |
+| `/compress` | Compress conversation history |
+| `/setup [section]` | Re-run the setup wizard (or a specific section) |
+| `/allow <basename> [--persist]` | Resolve a pending approval; add to runtime allowlist |
+| `/deny <basename>` | Reject a pending approval |
+| `/allowlist` | Show boot + runtime allowlists + pending approvals |
+| `/mcp` | Show MCP servers (configured vs live) + their tools |
+| `/calls` | Open overlay showing the most recent turn's tool calls |
+| `/cron <subcommand>` | Manage cron jobs from inside the TUI |
+
+The first token must be a known verb. The autocomplete dropdown surfaces matching commands as you type after `/`.
+
 ## Common usage
 
 ```bash

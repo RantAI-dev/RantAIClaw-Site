@@ -86,3 +86,36 @@ channel_max_backoff_secs = 60
 ```
 
 A channel that fails to connect retries with exponential backoff up to the cap. Other channels are unaffected.
+
+## Approval reply protocol (v0.6.5+)
+
+When the agent's `shell` tool hits a basename that isn't on the static allowlist in `Supervised` autonomy mode, the tool suspends and the agent's reply explains the failure to the user. The user can resolve the suspension by replying on the same channel with one of these tokens:
+
+| Token | Action | Persistence |
+|---|---|---|
+| `/allow brew` or `allow brew` | Add `brew` to runtime allowlist | session only |
+| `/allow brew --persist` or `allow brew persist` or `allow brew -p` | Add and write to disk | survives restart |
+| `/deny brew` or `deny brew` | Reject; agent's tool call fails | n/a |
+| `y brew` | Short form: allow once | session only |
+| `Y brew` (capital) | Short form: allow + persist | survives restart |
+| `n brew` | Short form: deny | n/a |
+
+The dispatch loop's parser (`src/channels/approval_relay.rs::try_handle_reply`) is **strict by design**:
+
+- Extra words past `--persist` are rejected (so "allow brew because I need it" doesn't silently approve).
+- The first token must be a known verb (so `find / -name foo` won't parse as a slash command).
+- The basename token must be a single word — multi-word args are rejected.
+
+On a successful parse, the channel sends an ack message ("✅ Added `brew` to the session allowlist — pending approval resolved; the agent will retry") and the suspended turn resumes. On a chatty/unrecognized message, the parser returns `None` and the message routes to the agent as a normal turn input.
+
+The reply parser runs **before** the inbound message dispatcher in `run_message_dispatch_loop`, so resolving an approval doesn't burn an agent turn.
+
+## Hot-reload caveat
+
+Editing `config.toml` to add a `[channels_config.<name>]` block fires the **config watcher** (since v0.6.37) and rebuilds the agent. **The new channel's listener task is not auto-spawned** — the agent reload only refreshes config, not running supervisor tasks. A system message tells you to restart for the listener to come online:
+
+```text
+⚠ 1 new channel(s) configured. Restart rantaiclaw to start polling them. /channels shows the current state.
+```
+
+Auto-spawn of channel listeners after hot-reload is a v0.6.8 deliverable.

@@ -1,0 +1,123 @@
+---
+title: Recovering from stuck turns
+description: When the agent hits the tool-call budget, gets stuck in a loop, or stops mid-task — how to diagnose and resume without losing context.
+---
+
+# Recovering from stuck turns
+
+Long agentic runs sometimes go sideways: the agent burns through tool calls, repeats the same failed action, or hits an authentication wall mid-task. v0.6.5-alpha and later add three pieces of UX to make these recoverable. This guide walks the three scenarios.
+
+## Scenario 1: tool-call budget exhausted
+
+You ask the agent to set up a complex skill (say, `gog` for Gmail + Calendar). Mid-task it's checking dependencies, trying installs, hitting auth prompts. After 10 tool calls (default `agent.max_tool_iterations`), it bails out.
+
+Pre-v0.6.5 behavior: the conversation ended with `[no response from model — try /retry or rephrase]` and an empty assistant turn. The user had no idea what was attempted.
+
+v0.6.5+ behavior: the iteration cap triggers a **forced tools-disabled summary turn**. The model gets a system message asking it to summarize what was attempted and recommend a next step. It then writes a real reply you can act on. The reply typically ends with a suggestion to `/continue`.
+
+### Inline tool log
+
+Even while the run is in progress, the TUI inline-flushes a one-line summary per tool call to scrollback as each call completes:
+
+- `▸ shell(command="which gog") → gog: command not found (12ms)`
+- `✗ shell(command="brew --version") → error: Permission denied (3s)`
+
+`▸` = success, `✗` = failure, time = wall-clock duration. So even before the cap is hit, you can see which step is slow / failing and steer manually.
+
+### `/continue` to extend the budget
+
+When you see the soft-cap summary, type `/continue` to resubmit the conversation with a fresh tool-call budget. The conversation history is preserved — the agent picks up where it left off.
+
+Optional steering: `/continue install the missing deps` — the extra text becomes additional context for the next turn.
+
+### `/calls` to inspect what happened
+
+If the soft-cap summary is too vague or you want a structured view of what was tried, type `/calls` to open an overlay showing every tool call from the most recent turn:
+
+- Sequence number + tool name + ✓/✗ marker
+- Args (pretty-printed; long strings truncated at 200 chars)
+- Result preview (first 8 lines)
+- Per-call duration
+
+This is the fastest way to find which specific step blocked the run.
+
+## Scenario 2: agent stuck in a loop
+
+The agent keeps trying the same thing. It runs `which brew` ten times because `brew` isn't installed and the model isn't reading the previous result. Or it retries an auth flow that's been denied each time.
+
+The **loop detector** (introduced in v0.6.5) catches this. It watches the last 5 tool calls and computes `(tool_name, args_json, hash(result))` for each. If the same triple appears 3 times within the window, it breaks out early with a distinct nudge:
+
+> "The same tool call (`which brew`) returned the same result 3 times in a row. You're stuck in a loop. Without using any more tools, briefly explain what's blocking you and suggest one concrete next step the user can take. Do not retry the same call."
+
+This is similar to the soft-cap path but with different framing — the model explains the blockage instead of summarizing progress.
+
+### What the loop detector does NOT catch
+
+- **Diverse failures that happen to share a theme.** If the agent tries `which gog`, then `gog --version`, then `brew install gog`, each fails differently. The loop detector sees three distinct triples and doesn't fire. The soft cap eventually catches it.
+- **Long monologues with no tool calls.** The detector only watches tool dispatch. If the model just thinks in text forever, the streaming timeout would catch that instead.
+- **Successful but uninformative repetition.** If `shell(echo hello)` returns "hello" 3 times, the detector fires — even though nothing is "broken." Type `/deny` or just steer the agent away.
+
+The detector window is small (last 5 calls) so it doesn't false-positive on legitimate batch work where you might run 10+ instances of the same command with different args.
+
+## Scenario 3: agent hits an approval wall
+
+The agent tries `brew install gog` mid-task. `brew` isn't on the static allowlist. **Pre-v0.6.5** behavior: the tool call hard-failed with `Command not allowed by security policy: brew install gog`, the agent saw a tool-error, sometimes wandered around looking for alternatives, sometimes gave up.
+
+**v0.6.5+** behavior: the tool **suspends** and waits for your decision. You see a system message:
+
+> 🔒 Approval needed: `brew` (full command: `brew install gog`). Type one of: `/allow brew` · `/allow brew --persist` · `/deny brew` (auto-deny in 5 min)
+
+Three choices:
+
+| Choice | What happens | Persistence |
+|---|---|---|
+| `/allow brew` | Adds `brew` to the runtime allowlist for this session | Lost on restart |
+| `/allow brew --persist` | Writes to `<profile>/policy/runtime_allowlist.toml` | Survives restart |
+| `/deny brew` | Rejects; agent's tool call fails with the original error | n/a |
+
+After your reply, the suspended tool call resumes (or fails, on deny). The agent continues the task without you having to retype anything.
+
+### Chat-channel equivalent
+
+If you're chatting from Telegram/Discord/Slack/etc. instead of the TUI, the agent's "command failed" message is what surfaces the failure to you. Reply with one of these tokens — same effect:
+
+- `allow brew` — session-only
+- `Y brew` (capital Y) — short-form persist
+- `n brew` — deny
+
+The reply parser is strict: chatty replies like "allow brew because I need it" do NOT match. The first token must be a known verb.
+
+## Putting it together
+
+The three pieces compose. A real run might look like:
+
+1. Ask agent to set up a complex skill
+2. Agent runs 4 successful tool calls (each inline-logged with ▸)
+3. Agent tries `brew --version` → suspends, asks for approval → you `/allow brew --persist`
+4. Agent runs 3 more tool calls
+5. Agent loops on `which gog` 3 times (different env paths) → loop detector fires
+6. Agent's nudge response asks for clarification — you provide it
+7. Agent runs 2 more tool calls and finishes
+
+If steps 5–6 had not caught the loop, the budget would have run out and the soft cap would have produced a summary instead of empty silence.
+
+## When to use each command
+
+| Symptom | Command |
+|---|---|
+| Run was useful but ended; want to keep going | `/continue` |
+| Want to see what the agent did | `/calls` (overlay) or scroll up to read the inline `▸` lines |
+| Tool failed with "Command not allowed" | `/allow <basename>` (or `/allow … --persist`) |
+| Pending approval is stuck and you want to abort | `/deny <basename>` |
+| Approval flow active but you don't remember what's pending | `/allowlist` |
+| Want to start over without losing the skill being set up | `/retry` (drops just the last assistant turn) |
+| Want to start completely fresh | `/new` |
+
+## What's still rough
+
+Two known limitations:
+
+- **`/continue` doesn't know your intent.** It just resubmits with a fresh budget. If the agent was going down a wrong path, `/continue` lets it keep going down that path. Add steering: `/continue stop trying brew, use npm instead`.
+- **The 5-minute pending-approval timeout** auto-denies if you don't respond. There's no way to extend or queue approvals while AFK. If you walk away mid-task, expect to redo.
+
+Both are tracked for v0.7.0 polish.

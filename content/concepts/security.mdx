@@ -31,6 +31,42 @@ Every tool call passes through `src/approval/mod.rs`. The gate combines:
 
 See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full model.
 
+## Runtime allowlist + async approval (v0.6.5+)
+
+Before v0.6.5, a `shell` command not on the boot allowlist hard-failed with `Command not allowed by security policy: …`. The user had to restart, edit config, retry. Tedious for one-off legitimate calls (`brew --version`, `gh repo view`).
+
+v0.6.5-alpha and later add an **async approval flow** layered on top of the static allowlist:
+
+1. Shell command's basename is not on the static `[autonomy].allowed_commands`.
+2. Instead of hard-failing, the tool suspends and registers a pending approval request in `PendingApprovals` on the security policy.
+3. The user is notified — in the TUI as a system message; on chat channels via the same scrollback (the agent's own "command not allowed" response becomes the prompt).
+4. User replies with one of:
+   - `/allow <basename>` — add to in-memory session allowlist (lost on restart)
+   - `/allow <basename> --persist` — write to `<profile>/policy/runtime_allowlist.toml` (survives restart)
+   - `/deny <basename>` — reject; tool call fails with the original error
+5. After ~5 minutes with no reply, the request auto-denies.
+6. On chat channels (Telegram/Discord/Slack/etc.), the user can reply with `allow brew`, `y brew`, or `Y brew` (`Y` capital = persist) — same effect, parsed by `src/channels/approval_relay.rs::try_handle_reply`.
+
+The runtime allowlist is **additive** to the static one — never strips a name from `allowed_commands`. The boot-time list remains the auditable ground truth; the runtime layer is the user's escape hatch for legitimate commands they didn't anticipate.
+
+Inspect current state with `/allowlist`:
+
+```text
+Boot allowlist (12): git, npm, cargo, ls, cat, grep, find, echo, pwd, wc, head, tail
+Runtime allowlist (2): brew, rg
+Pending approvals: (none)
+```
+
+This entire layer is **only active in Supervised** autonomy. ReadOnly blocks all shell unconditionally; Full bypasses both lists.
+
+## Loop detection
+
+The agent loop watches for stuck tool calls. If the same `(tool_name, args_json, hash(result))` triple appears 3 times within a sliding window of 5 calls, the loop breaks early with a distinct nudge ("the same call returned the same result N times in a row; without using more tools, explain what's blocking you"). This catches "model retries `which gog` ten times because it always returns the same not-found error" without consuming the full per-turn budget. Lives in `src/agent/loop_.rs::run_tool_call_loop`.
+
+## Soft cap on tool iterations
+
+`agent.max_tool_iterations` (default 10) used to hard-fail with `Agent exceeded maximum tool iterations` and an empty response. As of v0.6.5, hitting the cap triggers a forced **tools-disabled final turn** — the model summarizes what it tried and recommends a next step (often `/continue` to extend the budget). Net result: the user sees a real summary instead of a blank reply, and `/continue` resumes the conversation with a fresh budget.
+
 ## Sandbox auto-detection
 
 Sandbox selection is **automatic** based on what the host supports (`src/security/detect.rs`). Priority order:

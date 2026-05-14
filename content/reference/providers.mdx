@@ -24,16 +24,34 @@ api_url = "https://openrouter.ai/api/v1"
 
 These have dedicated provider modules:
 
-| Slug | Aliases | Source |
-|---|---|---|
-| `openrouter` | — | `src/providers/openrouter.rs` |
-| `anthropic` | — | `src/providers/anthropic.rs` |
-| `openai` | — | `src/providers/openai.rs` |
-| `ollama` | — | `src/providers/ollama.rs` |
-| `gemini` | `google`, `google-gemini` | `src/providers/gemini.rs` |
-| `bedrock` | `aws-bedrock` | `src/providers/bedrock.rs` |
-| `copilot` | `github-copilot` | `src/providers/copilot.rs` |
-| `openai-codex` | `openai_codex`, `codex` | OpenAI device-code auth flow |
+| Slug | Aliases | Source | Streaming |
+|---|---|---|---|
+| `openrouter` | — | `src/providers/openrouter.rs` (hand-rolled SSE) | ✅ |
+| **`anthropic`** | — | `src/providers/rig_native.rs` via `rig-core` (v0.6.39+) | ✅ |
+| **`openai`** | — | `src/providers/rig_native.rs` via `rig-core` (v0.6.39+) | ✅ |
+| **`gemini`** | `google`, `google-gemini` | `src/providers/rig_native.rs` via `rig-core` (v0.6.39+) | ✅ |
+| `ollama` | — | `src/providers/ollama.rs` (local, NDJSON not SSE) | partial |
+| `bedrock` | `aws-bedrock` | `src/providers/bedrock.rs` | ❌ |
+| `copilot` | `github-copilot` | `src/providers/copilot.rs` | ❌ |
+| `openai-codex` | `openai_codex`, `codex` | OpenAI device-code auth flow + Responses API | ❌ |
+
+> **rig adapter (v0.6.39):** Anthropic, OpenAI native, and Gemini moved from hand-rolled HTTP-and-Serde files to the [`rig-core`](https://docs.rs/rig-core) unified LLM client. We keep the legacy files in tree behind `--features legacy-providers` for one release cycle (v0.6 → v0.7) as a safety rollback. The factory branches on the compile flag in `src/providers/mod.rs::create_provider_with_url_and_options`.
+
+## Streaming matrix
+
+| Provider family | Streaming path | Native tool calling | Notes |
+|---|---|---|---|
+| OpenRouter | `openrouter.rs` (hand-rolled SSE) | ✅ | Shipped v0.4.0; covers all of OpenRouter's hosted catalog (Anthropic, OpenAI, Gemini, etc.) by HTTP shape |
+| OpenAI-compatible family (Groq, Mistral, xAI, MiniMax, GLM, Z.AI, Qwen, Moonshot, Cerebras, Together, Fireworks, …) | `compatible.rs` (hand-rolled SSE) | ✅ | Shipped v0.4.0; same OpenAI Chat Completions wire format, just different base URLs |
+| **Anthropic** | `rig-core` 0.37+ via `rig_native.rs` | ✅ | Event-typed SSE (`event: content_block_delta\ndata: …\n\n`), tool_use input_json_delta accumulation, prompt caching |
+| **OpenAI native** | `rig-core` 0.37+ via `rig_native.rs` | ✅ | Standard OpenAI SSE; custom `base_url` supported for compat targets |
+| **Gemini** | `rig-core` 0.37+ via `rig_native.rs` | ✅ | `:streamGenerateContent?alt=sse` endpoint, `\n\n` block boundaries |
+| Cohere, DeepSeek, Perplexity, Hyperbolic, Together (native), Voyage, Llamafile | available via rig (not yet wired to factory) | ✅ | ~5 LOC each to add to the `match canonical_name` arm in `rig_native.rs::for_provider_with_url` |
+| Bedrock | not yet | partial | AWS SDK shape; future v0.7.x |
+| Copilot | not yet | partial | GitHub OAuth specifics |
+| Ollama (local) | partial — NDJSON stream | ✅ | Different framing from SSE; works locally |
+
+When `default_provider` points at one of the rig-backed providers, `Provider::supports_streaming()` returns `true` and the agent loop uses `Provider::chat_stream(...)`, forwarding text deltas to the TUI/channel for live token rendering.
 
 ## OpenAI-compatible providers
 
@@ -113,3 +131,13 @@ pub struct ProviderCapabilities {
 ```
 
 For tool calling, providers without native support fall back to `ToolsPayload::PromptGuided` — the agent injects `<tool_call>`-tagged XML into the user prompt. The framework's `convert_tools` method per-provider produces the right payload variant (`Gemini`, `Anthropic`, `OpenAI`, or `PromptGuided`).
+
+## Legacy fallback flag (v0.6.39+)
+
+If the rig adapter misbehaves with a particular provider in your environment, rebuild with the legacy feature flag to route Anthropic / OpenAI / Gemini back through the pre-v0.6.39 hand-rolled files:
+
+```bash
+cargo build --release --features legacy-providers
+```
+
+The flag is per-build, not per-config. It will be removed in v0.7.0 after one release cycle of clean rig usage in production.

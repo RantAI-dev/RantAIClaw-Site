@@ -11,20 +11,47 @@ description: Reference for the `rantaiclaw setup` interactive wizard.
 
 For a step-by-step walk-through, see [Your First Agent](/docs/getting-started/first-agent).
 
+## The seven sections
+
+`rantaiclaw setup` (or `/setup` inside the TUI) walks a picker over the configurable subsystems. Each is independently re-runnable; pick the named section to jump straight in.
+
+| Section | When to use it | What it writes |
+|---|---|---|
+| **provider** | First-time or switching LLM provider | `default_provider`, `default_model`, encrypted `api_key` in `config.toml` |
+| **approvals** | Tightening or loosening autonomy | `policy/autonomy.toml` (L1-L4 preset), `policy/command_allowlist.toml`, `policy/forbidden_paths.toml` |
+| **channels** | Adding Telegram / Discord / Slack / WhatsApp / etc. | `[channels_config.<name>]` block per channel + encrypted bot tokens |
+| **persona** | Picking the agent's tone/role | `persona/SYSTEM.md` with templated content |
+| **skills** | Bundled starter pack + ClawHub discovery | Skills in `skills/<name>/SKILL.md` + `[skills.entries.<name>]` config |
+| **mcp** | Picking curated MCP servers (Filesystem, Web Fetch, Time, Notion, Slack, GitHub, Google Drive) | `[mcp_servers.<name>]` blocks + OAuth tokens in `secrets/` |
+| **memory** | Choosing memory backend | `[memory]` block (sqlite / lucid / postgres / markdown / none) |
+
+A "Hardware" section is gated by the `hardware` feature flag and only appears when built with hardware support.
+
 ## Re-running setup
 
 Setup is idempotent — re-running it lets you change providers, swap personas, add channels, refresh credentials, and add or modify MCP servers without losing existing data.
 
 ```bash
-rantaiclaw setup
+rantaiclaw setup              # interactive top-level picker
+rantaiclaw setup mcp          # jump into the MCP section
+rantaiclaw setup approvals    # jump into approvals
+rantaiclaw setup hardware     # hardware peripherals (feature-gated)
 ```
 
-To configure a specific subsystem only:
+Inside the TUI, `/setup <section>` does the same in-process — no need to leave the chat.
 
-```bash
-rantaiclaw setup mcp        # MCP servers picker (with OAuth where needed)
-rantaiclaw setup hardware   # hardware peripherals
-```
+## Hot-reload on close
+
+When you Esc the setup overlay (or finish a wizard), three things happen automatically:
+
+1. The new `config.toml` is written (with secrets encrypted to `enc2:<hex>` inline).
+2. The **config watcher** (v0.6.37+) detects the file change and triggers `reload_config`.
+3. The agent rebuilds via `Agent::from_config`, picking up the new provider / persona / channels / MCP servers / memory backend — and emits a `⟳ config.toml changed — agent reloaded; next turn uses the new settings.` system message in scrollback.
+
+You don't need to restart the process. Exceptions:
+
+- **New channel listeners** still need a restart (the daemon's `start_channels` task spawns at boot only; auto-spawn after wizard close is a v0.6.8 deliverable). The wizard tells you this with a `⚠ N new channel(s) configured. Restart rantaiclaw to start polling them.` system message.
+- **Sandbox / feature-gated backends** (Bubblewrap, Postgres memory, Matrix channel, etc.) need a rebuild with `--features <name>`.
 
 ## Non-interactive setup
 
