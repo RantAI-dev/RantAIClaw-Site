@@ -17,7 +17,8 @@ The script:
 - downloads the matching prebuilt binary from the [latest release](https://github.com/RantAI-dev/RantAIClaw/releases/latest),
 - verifies its SHA256 checksum,
 - installs to `~/.cargo/bin` or `~/.local/bin`,
-- prints the `export PATH=...` line for your shell if needed.
+- prints the `export PATH=...` line for your shell if needed,
+- **runs `rantaiclaw setup --force` at the end** — the full guided wizard (provider, approvals, channels, persona, skills, MCP). Reattaches `/dev/tty` so prompts still work under `curl | bash`. Pass `--skip-setup` or set `RANTAICLAW_SKIP_SETUP=1` to install only.
 
 No Rust toolchain. No compiler. No `git clone`.
 
@@ -27,14 +28,206 @@ No Rust toolchain. No compiler. No `git clone`.
 rantaiclaw --version
 ```
 
-If you see `command not found`, the installer printed a `PATH` export — copy that line into your shell rc and re-source it.
+If you see `command not found`, the installer printed a `PATH` export — copy that line into your shell rc and re-source it. See [What the installer does to your PATH](#what-the-installer-does-to-your-path) below.
+
+## What the installer does to your `PATH`
+
+The installer picks an install directory that's *already* on `$PATH` whenever possible. When it can't, it offers to amend your **shell rc file** so the binary is picked up next time you open a shell.
+
+Shell-rc files written by the installer, by shell:
+
+| Shell | rc file amended |
+|---|---|
+| **bash** (Linux: Debian/Ubuntu, Arch, Fedora, openSUSE, Alpine, …) | `~/.bashrc` |
+| **bash** (macOS — login shell) | `~/.bash_profile` (or `~/.profile` if already present) |
+| **zsh** (macOS Catalina+ default; common on Linux) | `~/.zshrc` |
+| **fish** | `~/.config/fish/config.fish` (uses `fish_add_path`) |
+| **ksh / mksh** | `~/.kshrc` |
+| **tcsh / csh** | `~/.tcshrc` or `~/.cshrc` |
+| **dash / ash / sh** | `~/.profile` |
+
+After the install finishes, if the binary isn't usable in the **current** shell, a bold **⚠ ACTION REQUIRED** box is printed with the exact `source` command to run. The two most common cases:
+
+```bash
+# bash on Linux
+source ~/.bashrc
+
+# zsh (Linux or macOS)
+source ~/.zshrc
+
+# fish
+exec fish        # or: source ~/.config/fish/config.fish
+```
+
+Opening a new terminal also works.
+
+### Controlling the PATH amendment
+
+| Variable | Effect |
+|---|---|
+| `RANTAICLAW_AUTO_MODIFY_PATH=1` | Skip the prompt, always amend the rc (good for automation) |
+| `RANTAICLAW_NO_MODIFY_PATH=1` | Skip the prompt, never amend the rc (prints the `export` line instead) |
+
+If you piped `curl | bash` (no TTY for prompts), the installer behaves as if `RANTAICLAW_NO_MODIFY_PATH=1` and just prints the export line — review it, then add it yourself:
+
+```bash
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+source ~/.bashrc
+```
 
 ## Windows
 
-Native Windows is not yet supported by the installer. Two options:
+A native Windows installer is the **recommended** path. WSL2 remains an alternative for users who prefer a Linux toolchain.
 
-- **WSL2** — install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install), then run the bootstrap script from inside the Linux environment.
-- **Manual** — download `x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/RantAI-dev/RantAIClaw/releases/latest) and place `rantaiclaw.exe` somewhere on your `PATH`.
+### Option 0 — Native Windows one-liner (easiest)
+
+Open PowerShell and run:
+
+```powershell
+iwr https://raw.githubusercontent.com/RantAI-dev/RantAIClaw/main/scripts/install.ps1 -UseBasicParsing | iex
+```
+
+The script detects your architecture, downloads `rantaiclaw-x86_64-pc-windows-msvc.zip` + `SHA256SUMS` from the latest release, verifies the checksum, extracts to `%LOCALAPPDATA%\Programs\rantaiclaw\`, amends your **User** `PATH` via the registry (not `setx` — which truncates at 1024 chars), and **runs `rantaiclaw.exe setup --force` automatically** (full guided wizard — provider, approvals, channels, persona, skills, MCP). Open a new terminal afterwards because cmd.exe / VS Code / Git Bash tabs cache the old `PATH`. Pass `-SkipSetup` or set `$env:RANTAICLAW_SKIP_SETUP=1` to install only.
+
+**Options** (flags and env vars mirror `bootstrap.sh`):
+
+```powershell
+iwr https://raw.githubusercontent.com/RantAI-dev/RantAIClaw/main/scripts/install.ps1 -OutFile install.ps1
+.\install.ps1 -InstallDir "$HOME\bin"     # custom install location
+.\install.ps1 -SkipSetup                  # don't auto-run `setup --force`
+.\install.ps1 -Onboard -Interactive       # legacy `onboard` flow
+.\install.ps1 -NoModifyPath               # never touch PATH
+.\install.ps1 -ForceModifyPath            # always amend PATH (no prompt)
+.\install.ps1 -Version v0.6.52-alpha      # pin to a specific release
+```
+
+If PowerShell execution policy blocks a saved `.ps1`, either pipe via `iex` (in-memory; not blocked) or unblock for the current shell only with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+
+If you'd rather do everything by hand, see **Option 1** below.
+
+### Option 1 — Native Windows manual install
+
+#### Step 1 — Download the binary
+
+From the [latest release](https://github.com/RantAI-dev/RantAIClaw/releases/latest), grab `rantaiclaw-x86_64-pc-windows-msvc.zip`. Or in PowerShell:
+
+```powershell
+$VERSION = "latest"   # or a specific tag like "v0.6.51-alpha"
+$TARGET  = "x86_64-pc-windows-msvc"
+curl.exe -fsSL -O "https://github.com/RantAI-dev/RantAIClaw/releases/$VERSION/download/rantaiclaw-$TARGET.zip"
+```
+
+#### Step 2 — Extract
+
+```powershell
+Expand-Archive "rantaiclaw-x86_64-pc-windows-msvc.zip" -DestinationPath "$HOME\rantaiclaw"
+```
+
+That gives you `C:\Users\<you>\rantaiclaw\rantaiclaw.exe`.
+
+#### Step 3 — Add it to `PATH`
+
+Pick **one** of the three methods below. **Method A is the easiest** — one PowerShell command, no GUI.
+
+##### Method A — Automatic (PowerShell, one command)
+
+```powershell
+setx PATH "$HOME\rantaiclaw;$env:Path"
+```
+
+After running it:
+
+- **Close this PowerShell window and open a new one** — `setx` only updates the registry; existing terminals keep their old `PATH`.
+- `rantaiclaw.exe --version` should work in the new window.
+
+If `setx` complains the value is too long (>1024 chars), use Method B or C instead.
+
+##### Method B — GUI (most reliable on managed/corporate machines)
+
+1. Press **Win**, type **"Environment Variables"**, and click **"Edit the system environment variables"**.
+2. Click **"Environment Variables..."** at the bottom-right of the *System Properties* window.
+3. Under **"User variables for &lt;you&gt;"** (top half), select **`Path`** and click **"Edit..."**.
+4. Click **"New"** and paste `C:\Users\<your-user>\rantaiclaw` (replace `<your-user>` with your actual username).
+5. Click **OK** → **OK** → **OK** to close all three dialogs.
+6. **Open a new PowerShell / Terminal window** — existing windows won't see the change.
+7. Verify: `rantaiclaw.exe --version`.
+
+> Avoid touching **System variables** `Path` (bottom half) unless you actually want a system-wide install — that requires admin rights and affects every user.
+
+##### Method C — Drop it into a folder that's already on PATH
+
+If you'd rather not edit `PATH` at all, move the binary into a folder that's already there. Run `$env:Path -split ';'` in PowerShell to list them. The easiest writable choice is `WindowsApps`, which is always on PATH for your user:
+
+```powershell
+Move-Item "$HOME\rantaiclaw\rantaiclaw.exe" "$HOME\AppData\Local\Microsoft\WindowsApps\rantaiclaw.exe"
+```
+
+`rantaiclaw.exe --version` works immediately, even in the same window.
+
+#### Step 4 — Verify
+
+In a **new** PowerShell window:
+
+```powershell
+rantaiclaw.exe --version       # rantaiclaw 0.6.x
+rantaiclaw.exe setup           # guided wizard
+rantaiclaw.exe doctor          # validate install
+rantaiclaw.exe chat            # start chatting
+```
+
+If `rantaiclaw.exe` is "not recognized as the name of a cmdlet…", your `PATH` edit didn't apply — see [Windows PATH troubleshooting](#windows-path-troubleshooting) below.
+
+#### Optional — verify the cosign signature
+
+Requires [cosign](https://github.com/sigstore/cosign):
+
+```powershell
+$VERSION = "v0.6.51-alpha"   # or the latest tag
+$TARGET  = "x86_64-pc-windows-msvc"
+curl.exe -fsSL -O "https://github.com/RantAI-dev/RantAIClaw/releases/download/$VERSION/rantaiclaw-$TARGET.zip.bundle"
+cosign verify-blob `
+  --bundle "rantaiclaw-$TARGET.zip.bundle" `
+  --certificate-identity-regexp "https://github.com/RantAI-dev/RantAIClaw/.github/workflows/pub-release.yml@.*" `
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" `
+  "rantaiclaw-$TARGET.zip"
+```
+
+#### Windows PATH troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `'rantaiclaw' is not recognized…` in the **same** PowerShell window where you ran `setx` | `setx` only affects *new* sessions | Close the window, open a new one |
+| Works in PowerShell but missing in cmd.exe / Git Bash / VS Code terminal | Each tool may cache its own `PATH` snapshot | Restart the tool (close & reopen) |
+| Works for you but not for another user on the same PC | You added to *User* PATH; they need *System* PATH | Repeat Method B in the *System variables* half (requires admin) |
+| `setx` complains "value too long" | The combined PATH exceeds 1024 chars | Use Method B or C instead |
+
+### Option 2 — WSL2
+
+Install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install):
+
+```powershell
+wsl --install
+```
+
+Then, inside the WSL Ubuntu shell, run the standard Linux one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RantAI-dev/RantAIClaw/main/scripts/bootstrap.sh | bash
+rantaiclaw --version
+```
+
+The binary lives inside the WSL filesystem; invoke it from the WSL shell (or `wsl rantaiclaw` from PowerShell).
+
+### Option 3 — Build from source (MSVC)
+
+Requires Rust 1.92+ (`rustup-init.exe`) and the *Desktop development with C++* workload from Visual Studio Build Tools. Then:
+
+```powershell
+git clone https://github.com/RantAI-dev/RantAIClaw.git
+cd RantAIClaw
+cargo build --release
+.\target\release\rantaiclaw.exe --version
+```
 
 ## Building from source
 
