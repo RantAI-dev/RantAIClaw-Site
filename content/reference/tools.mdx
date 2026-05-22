@@ -1,6 +1,6 @@
 ---
 title: Tools
-description: Built-in tools registered with the runtime. Twenty always-on plus several conditional tools that gate on config.
+description: Built-in tools registered with the runtime. Twenty-five always-on plus conditional tools that gate on config and peripheral-contributed tools when hardware is configured.
 ---
 
 # Tools
@@ -33,6 +33,11 @@ These register unconditionally:
 | `pdf_read` | Extract text from a PDF |
 | `screenshot` | Capture a screenshot |
 | `image_info` | Inspect image metadata |
+| `skills_list` | List installed skills |
+| `skill_view` | Read the prompt/metadata of an installed skill |
+| `skills_search` | Search across installed skill prompts |
+| `skills_install` | Install a skill from a git URL or local path |
+| `skills_install_deps` | Run a skill's brew/npm/uv/go/download install recipes |
 
 ## Conditional tools
 
@@ -62,6 +67,18 @@ Tool parameter schemas (returned by `parameters_schema()`) are what the LLM is t
 - Tools handle their own missing-arg / wrong-type errors; they return `ToolResult { success: false, error: Some(...) }` rather than panicking.
 
 For full parameter schemas of each tool, see the implementation at `src/tools/<name>.rs`.
+
+## Peripheral-contributed tools
+
+When `[peripherals]` is configured, each registered board contributes additional tools via its `Peripheral::tools()` implementation. Common ones:
+
+| Tool | Source |
+|---|---|
+| `hardware_board_info` | Any registered peripheral |
+| `hardware_memory_map` | Boards that expose a memory map |
+| `hardware_memory_read` | Boards that expose readable memory |
+
+Boards may also contribute flash/upload tools (Arduino, Nucleo). The exact set depends on which boards are enabled — see [Reference → CLI](/docs/reference/cli) (`rantaiclaw hardware`, `rantaiclaw peripheral`) and `src/peripherals/`.
 
 ## Skill-defined tools
 

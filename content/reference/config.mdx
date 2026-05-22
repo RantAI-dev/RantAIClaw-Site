@@ -42,13 +42,14 @@ These live at the root of `config.toml`:
 
 | Key | Type | Default |
 |---|---|---|
+| `schema_version` | int | written by migrations; do not edit by hand |
 | `default_provider` | string | `"openrouter"` |
 | `default_model` | string | `"anthropic/claude-sonnet-4.6"` |
-| `default_temperature` | float | (provider default) |
+| `default_temperature` | float | `0.7` |
 | `api_key` | string (encrypted as `enc2:<hex>`) | — |
 | `api_url` | string | (provider default) |
-| `workspace_dir` | path | profile workspace |
-| `config_path` | path | (set by loader) |
+
+`workspace_dir` and `config_path` exist on the in-memory `Config` struct but are `#[serde(skip)]` — they are populated by the loader and cannot be set in `config.toml`.
 
 ## Top-level sections
 
@@ -89,8 +90,8 @@ The `Config` struct in `src/config/schema.rs` has 32 sections:
 | `[gateway_agents]` | Per-gateway agent routing |
 | `[hardware]` | Hardware discovery |
 | `[mcp_servers]` | MCP server specs (table of named entries) |
-| `[security.sandbox]` | Sandbox enabled, backend selection |
-| `[security.resources]` | Subprocess resource limits |
+| `[security.sandbox]` | Sandbox enabled, backend selection — **not currently wired** (`SecurityConfig` is defined but not a field on `Config`; the section parses but has no effect) |
+| `[security.resources]` | Subprocess resource limits — **not currently wired** (same reason as above) |
 
 ## Channel config blocks
 

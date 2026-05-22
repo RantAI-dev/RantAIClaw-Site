@@ -45,11 +45,17 @@ content = """
 - If checks pass, summarize the deployment plan in 3 bullets
 """
 
-# Optional match expressions — auto-load when an incoming message matches
-[[match]]
-pattern = "deploy"
-type = "contains"
+# Optional install recipes — fetched by `rantaiclaw skills install-deps <name>`
+[[install_recipes]]
+kind = "brew"
+package = "jq"
+
+[[install_recipes]]
+kind = "npm"
+package = "wrangler"
 ```
+
+> `[[match]]` auto-load blocks are not part of the current `SkillManifest` — the loader ignores them. Skill activation is driven by inclusion in the agent's skill set, not by message-pattern matching at parse time.
 
 ## Tool kinds (executable)
 
@@ -65,6 +71,20 @@ Other kinds (`template`, `builtin`, etc.) return `"Unsupported skill tool kind"`
 - 120-second timeout
 - 1MB output cap
 - Skill tools are exposed to the LLM with the prefix `skill_<skill>_<tool>` (underscores)
+
+## Install-recipe kinds
+
+`[[install_recipes]]` entries declare external dependencies the skill needs. They run when the user invokes `rantaiclaw skills install-deps <name>`:
+
+| Kind | Effect |
+|---|---|
+| `brew` | `brew install <package>` (macOS / Linuxbrew) |
+| `npm` | `npm install -g <package>` |
+| `uv` | `uv tool install <package>` |
+| `go` | `go install <package>@latest` |
+| `download` | Fetch a URL to a target path (with optional `sha256` verification) |
+
+The runtime never auto-installs deps; the user has to opt in by running `install-deps`.
 
 ## SKILL.md (markdown) — what actually happens
 

@@ -9,26 +9,29 @@ description: Built-in communication channels and their configuration. Allowlist 
 
 ## Built-in channels
 
+Slugs below match `[channels.<slug>]` blocks in `config.toml` exactly.
+
 | Slug | Status | Cargo feature | Transport |
 |---|---|---|---|
-| `cli` | Always-on | (default) | stdin / stdout |
 | `dingtalk` | Always-on | (default) | WebSocket |
 | `discord` | Always-on | (default) | WebSocket gateway |
-| `email_channel` | Always-on | (default) | IMAP + SMTP |
+| `email` | Always-on | (default) | IMAP + SMTP |
 | `imessage` | Always-on | (default) | macOS bridge (when present) |
 | `irc` | Always-on | (default) | IRC protocol |
 | `linq` | Always-on | (default) | HTTP webhook + signed |
 | `mattermost` | Always-on | (default) | WebSocket |
 | `nextcloud_talk` | Always-on | (default) | HTTP webhook + HMAC |
 | `qq` | Always-on | (default) | (per-deployment) |
-| `qr_terminal` | Always-on | (default) | Terminal QR pairing |
 | `signal` | Always-on | (default) | signal-cli REST |
 | `slack` | Always-on | (default) | Socket Mode / Web API |
 | `telegram` | Always-on | (default) | Long-poll API |
+| `webhook` | Always-on | (default) | Inbound HTTP webhook (signed) |
 | `whatsapp` | Always-on (Cloud API) | (default) | Cloud API |
 | `whatsapp_web` | Feature-gated | `whatsapp-web` | Multi-device protocol via `wa-rs` |
 | `lark` | Feature-gated | `channel-lark` | WebSocket |
 | `matrix` | Feature-gated | `channel-matrix` | Matrix SDK with E2EE |
+
+> `cli` and `qr_terminal` are internal modules (REPL stdin/stdout and pairing UI) and are **not** configurable channel slugs — they have no `[channels.cli]` / `[channels.qr_terminal]` block.
 
 There is no separate `whatsapp-cloud` slug — Cloud API is just `whatsapp`. The Web variant requires the `whatsapp-web` Cargo feature.
 
@@ -51,7 +54,7 @@ Each channel has its own `[channels.<slug>]` block with channel-specific keys. T
 | `imessage` | `allowed_contacts` | Offline |
 | `signal` | `allowed_from` | Offline |
 | `whatsapp`, `whatsapp_web` | `allowed_numbers` | Offline |
-| `email_channel` | `allowed_senders` | **Allow-all** (exception) |
+| `email` | `allowed_senders` | **Allow-all** (exception) |
 | `linq` | `allowed_senders` | (per-deployment) |
 
 Most allowlists support a wildcard entry `"*"` to allow-all explicitly. Email's `allowed_senders` accepts both full addresses (`alice@example.com`) and domain prefixes (`@example.com`).

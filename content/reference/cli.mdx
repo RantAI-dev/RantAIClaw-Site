@@ -22,6 +22,7 @@ These work on every subcommand:
 |---|---|
 | `rantaiclaw onboard` | Original interactive setup wizard (kept for backward compat) |
 | `rantaiclaw setup` | Canonical interactive setup; subcommands `setup mcp`, `setup hardware`, etc. |
+| `rantaiclaw autonomy <preset>` | Switch the runtime autonomy preset (writes `policy/autonomy.toml`) |
 | `rantaiclaw agent` | Run an agent — interactive REPL (no flag) or one-shot (`--message`) |
 | `rantaiclaw chat` | Launch the terminal UI (TUI) — requires the `tui` feature |
 | `rantaiclaw daemon` | Production daemon — gateway + all channels + scheduler + heartbeat |
@@ -29,7 +30,7 @@ These work on every subcommand:
 | `rantaiclaw service` | Generate / install systemd / launchd / Windows service definitions |
 | `rantaiclaw doctor` | Validate install + config (exit 0 = pass, 1 = fail) |
 | `rantaiclaw status` | Print runtime status |
-| `rantaiclaw config <subcommand>` | Show, validate, or export config schema |
+| `rantaiclaw config schema` | Export the config JSON Schema (no other subcommands today) |
 | `rantaiclaw memory <subcommand>` | List, get, stats, clear memory entries |
 | `rantaiclaw skills <subcommand>` | List, show, install, remove skills (note: plural `skills`) |
 | `rantaiclaw cron <subcommand>` | Manage cron jobs |
@@ -46,6 +47,7 @@ These work on every subcommand:
 | `rantaiclaw personality` | Manage active persona |
 | `rantaiclaw profile <subcommand>` | Multi-profile management |
 | `rantaiclaw update` | Self-update (replace the binary) |
+| `rantaiclaw rollback` | Restore the previously installed binary from the snapshot saved by `update` |
 | `rantaiclaw uninstall` | Remove the agent and (optionally) its data |
 | `rantaiclaw completions <shell>` | Print shell completion script |
 
@@ -61,6 +63,9 @@ You may have seen these documented elsewhere. They **do not exist** as top-level
 | `rantaiclaw mcp` | MCP setup goes through `rantaiclaw setup mcp` |
 | `rantaiclaw secret` | Secrets are managed via `rantaiclaw setup` (encrypted inline as `enc2:<hex>` in `config.toml`) |
 | `rantaiclaw skill` (singular) | The CLI is plural: `rantaiclaw skills` |
+| `rantaiclaw config show` | No such verb — open `config.toml` directly |
+| `rantaiclaw config validate` | Use `rantaiclaw doctor` |
+| `rantaiclaw cron run` / `cron runs` | These are LLM-callable tool names, not CLI verbs |
 
 ## Common usage
 
@@ -94,7 +99,7 @@ rantaiclaw profile use work
 memory list [--category core|daily|conversation|<custom>] [--session <id>] [--limit N] [--offset N]
 memory get <key>
 memory stats
-memory clear [--category <c>] [--session <id>]
+memory clear [--category <c>] [--session <id>] [--key <k>] [--yes]
 ```
 
 ### `rantaiclaw skills`
@@ -103,6 +108,9 @@ memory clear [--category <c>] [--session <id>]
 skills list
 skills show <name>
 skills install <git-url-or-local-path>
+skills install-deps <name>     # run the skill's brew / npm / uv / go / download recipes
+skills update <name>           # git-pull a skill installed from a URL
+skills inspect <name>          # dump the parsed SKILL.toml / SKILL.md
 skills remove <name>
 ```
 
@@ -110,11 +118,17 @@ skills remove <name>
 
 ```bash
 cron list
-cron add <spec>
+cron add <name> <cron-expression> <prompt>
+cron add-at <name> <iso-datetime> <prompt>
+cron add-every <name> <interval> <prompt>   # interval e.g. "30s", "5m", "1h"
+cron once <prompt>                          # fire-and-forget one-shot
 cron remove <id>
-cron run <id>
-cron runs <id>
+cron update <id> [--name ...] [--prompt ...] [--schedule ...]
+cron pause <id>
+cron resume <id>
 ```
+
+> `cron run` and `cron runs` are tool names (LLM-callable), not CLI subcommands.
 
 ### `rantaiclaw profile`
 
@@ -129,7 +143,23 @@ profile clone <src> <dst>
 ### `rantaiclaw config`
 
 ```bash
-config show
-config validate
-config schema --json     # exports JSON Schema (powered by schemars derive)
+config schema    # prints the JSON Schema (powered by schemars derive). No flags.
+```
+
+`config show` and `config validate` do not exist. Read `config.toml` directly, or run `rantaiclaw doctor` to validate.
+
+### `rantaiclaw auth`
+
+OAuth and subscription-based login flows (Codex device-code, Anthropic Claude.ai subscription, etc.).
+
+```bash
+auth login [--provider <name>]      # browser device-code or auth-URL flow
+auth paste-redirect <url>           # paste redirect URL when the browser can't auto-complete
+auth paste-token <token>            # paste an opaque token (provider-dependent)
+auth setup-token                    # generate a long-lived setup token
+auth refresh                        # refresh access tokens for the active provider
+auth use <provider>                 # set the active auth profile
+auth list                           # list all stored auth entries
+auth status                         # show currently active auth + expiry
+auth logout [--provider <name>]     # revoke and remove stored credentials
 ```
