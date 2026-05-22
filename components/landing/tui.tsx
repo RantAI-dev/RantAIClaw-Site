@@ -33,14 +33,18 @@ export function Tui() {
         </MotionInView>
 
         <MotionInView>
-          {/* Placeholder. Drop a real screenshot at public/tui-screenshot.png
-              and change the src below from .svg to .png. */}
           <div className="overflow-hidden rounded-xl border border-border/60 bg-[#0a0f1a] shadow-2xl shadow-primary/10">
-            <img
-              src={withBase("/tui-screenshot.svg")}
-              alt="RantAIClaw TUI"
+            <video
+              src={withBase("/tui.mp4")}
+              poster={withBase("/tui-screenshot.svg")}
               width={1600}
               height={900}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              aria-label="RantAIClaw TUI"
               className="block h-auto w-full"
             />
           </div>
