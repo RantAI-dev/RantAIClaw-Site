@@ -20,9 +20,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Project-page deploy → site lives at /RantAIClaw-Site/.
-      # If you wire up a custom domain (CNAME), set this to "" instead.
-      NEXT_PUBLIC_BASE_PATH: /RantAIClaw-Site
+      # Custom-domain deploy (claw.rantai.dev) → site lives at /.
+      # If you ever revert to a project-page deploy (<user>.github.io/RantAIClaw-Site/),
+      # set this to "/RantAIClaw-Site" instead.
+      NEXT_PUBLIC_BASE_PATH: ""
     steps:
       - name: Checkout
         uses: actions/checkout@v4
