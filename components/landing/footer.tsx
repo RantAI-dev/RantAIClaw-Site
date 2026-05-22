@@ -113,6 +113,16 @@ export function LandingFooter() {
                     Issues
                   </a>
                 </li>
+                <li>
+                  <a
+                    href="https://rantai.dev"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-foreground/80 hover:text-foreground"
+                  >
+                    rantai.dev
+                  </a>
+                </li>
               </ul>
             </div>
             <div>
@@ -188,11 +198,28 @@ export function LandingFooter() {
               <h2 className="mb-2 text-5xl leading-none tracking-tighter md:text-7xl lg:text-8xl">
                 RantAIClaw
               </h2>
+              <a
+                href="https://rantai.dev"
+                target="_blank"
+                rel="noreferrer"
+                className="mb-3 inline-block font-mono text-xs uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+              >
+                by RantAI &rarr;
+              </a>
               <div
                 className="font-mono text-xs text-muted-foreground"
                 suppressHydrationWarning
               >
-                &copy; {new Date().getFullYear()} RantAI. Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
+                &copy; {new Date().getFullYear()}{" "}
+                <a
+                  href="https://rantai.dev"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-foreground/80 underline-offset-4 hover:text-foreground hover:underline"
+                >
+                  RantAI
+                </a>
+                . Licensed under the GNU Affero General Public License v3.0 (AGPL-3.0).
               </div>
             </div>
 

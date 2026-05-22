@@ -14,7 +14,20 @@ const config = {
   },
   docsRepositoryBase: "https://github.com/RantAI-dev/RantAIClaw-Site/tree/main",
   footer: {
-    content: `© ${new Date().getFullYear()} RantAI. All rights reserved.`,
+    content: (
+      <span>
+        &copy; {new Date().getFullYear()}{" "}
+        <a
+          href="https://rantai.dev"
+          target="_blank"
+          rel="noreferrer"
+          style={{ textDecoration: "underline", textUnderlineOffset: "4px" }}
+        >
+          RantAI
+        </a>
+        . All rights reserved.
+      </span>
+    ),
   },
   sidebar: {
     defaultMenuCollapseLevel: 1,
