@@ -25,5 +25,7 @@ description: Implement the `Tool` trait with a strict parameter schema and struc
 
 - `src/tools/file_read.rs` — minimal read-only tool
 - `src/tools/shell.rs` — shell with sandbox + allowlist
-- `src/tools/web_search.rs` — outbound HTTP with structured result
+- `src/tools/web_search_tool.rs` — outbound HTTP with structured result (`WebSearchTool`)
 - `src/tools/memory_recall.rs` — semantic search over memory
+
+For retrieval over ingested documents (PDF/markdown/images) rather than memory, see the [Knowledge Base](/docs/knowledge-base) — a separate subsystem with its own ingestion and search surface.

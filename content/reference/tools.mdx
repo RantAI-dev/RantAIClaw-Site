@@ -1,6 +1,6 @@
 ---
 title: Tools
-description: Built-in tools registered with the runtime. Twenty-five always-on plus conditional tools that gate on config and peripheral-contributed tools when hardware is configured.
+description: Built-in tools registered with the runtime. Twenty-eight always-on plus conditional tools that gate on config, two compile-feature-gated tools (default-on), and peripheral-contributed tools when hardware is configured.
 ---
 
 # Tools
@@ -28,6 +28,8 @@ These register unconditionally:
 | `memory_forget` | Delete a memory entry |
 | `schedule` | Schedule an action |
 | `proxy_config` | Read or update HTTP proxy config |
+| `manage_permissions` | **Owner-only.** Manage channel owners, the non-owner (guest) capability ceiling, and the owner shell allow-command list — all from chat. Hard-denied to non-owners via `GuestGate::OWNER_ONLY_TOOLS`. (v0.6.75; `allow-command` target added v0.6.84) |
+| `issue_pairing_code` | **Owner-only.** Mint an on-demand pairing code from chat so a new user or device can self-onboard without a daemon restart. Hard-denied to non-owners via `GuestGate::OWNER_ONLY_TOOLS`. (v0.6.82) |
 | `git_operations` | Git commands wrapped as tool calls |
 | `pushover` | Send a Pushover notification |
 | `pdf_read` | Extract text from a PDF |
@@ -36,8 +38,22 @@ These register unconditionally:
 | `skills_list` | List installed skills |
 | `skill_view` | Read the prompt/metadata of an installed skill |
 | `skills_search` | Search across installed skill prompts |
+| `author_skill` | Write-side skill authoring ("make me a skill that does X") — writes a new `SKILL.md` into the active profile so it loads on the next turn. Registered when an active profile exists. (v0.6.77) |
 | `skills_install` | Install a skill from a git URL or local path |
 | `skills_install_deps` | Run a skill's brew/npm/uv/go/download install recipes |
+
+> `author_skill` and `skills_install` register only when an active profile can be resolved (`ProfileManager::active()`); the fresh-install setup wizard creates one, so in practice they are present. Both route through the approval manager by name like `shell`.
+
+## Compile-feature-gated tools (default-on build)
+
+Two tools are gated behind the `remote-install` Cargo feature. That feature is part of the **default** feature set — `default = ["tui", "whatsapp-web", "remote-install", "kb"]` in `Cargo.toml` — so a standard `cargo build` and the released binaries ship them. They only disappear from a `--no-default-features` build that omits `remote-install`.
+
+| Tool | Feature | Purpose |
+|---|---|---|
+| `ssh` | `remote-install` | Open an SSH transport (russh) and run commands on a remote host. |
+| `pty` | `remote-install` | Drive a live tmux/pty session. |
+
+Both are **owner-only** (`GuestGate::OWNER_ONLY_TOOLS`) and hard-denied to non-owners — they run arbitrary commands with no glob-checkable single command, so a guest allowlist cannot safely bound them. Registered in `all_tools_with_runtime` under `#[cfg(feature = "remote-install")]`.
 
 ## Conditional tools
 
@@ -51,6 +67,8 @@ These only register when their gate is satisfied:
 | `composio` | `[composio].api_key` is set (gives access to ~150 app integrations) |
 | `delegate` | `[[agents]]` is configured (multi-agent dispatch) |
 | `list_tasks`, `get_task`, `create_task`, `update_task_status`, `create_subtask`, `complete_subtask`, `review_task`, `add_comment`, `read_comments` | `[tasks].enabled = true` |
+
+> **Easy-mode defaults (v0.6.89, config schema v9).** On a fresh install the `[browser]`, `[http_request]`, and `[web_search]` gates all default to `enabled = true`, and `[http_request].allowed_domains` defaults to `["*"]` (allow-all). So `browser_open` / `browser`, `http_request`, and `web_search_tool` register out of the box unless you explicitly disable them. These defaults widen *local capability* only. The *exposure* boundary stays deny-by-default: gateway pairing, localhost bind, `allow_public_bind = false`, and rate limits are untouched. Defaults are defined in `src/config/schema.rs` (`BrowserConfig` / `HttpRequestConfig` / `WebSearchConfig`).
 
 ## Default vs all
 

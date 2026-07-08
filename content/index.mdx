@@ -7,7 +7,7 @@ description: Production-grade multi-agent runtime written in Rust. Powers autono
 
 **Production multi-agent runtime in 100% Rust.** Powers autonomous AI employees that communicate across channels, execute tools, manage memory, and run skills — all from a single binary.
 
-RantAIClaw is designed for the boring real-world constraints production agents actually hit: cold start under 200ms, idle memory around 15MB, deterministic concurrency, secure-by-default tool execution, and per-profile isolation for multi-tenant deployments.
+RantAIClaw is designed for the boring real-world constraints production agents actually hit: cold start under 200ms, idle memory around 15MB, deterministic concurrency, usable-by-default local tools behind a deny-by-default exposure boundary, and per-profile isolation for multi-tenant deployments.
 
 ## Why this exists
 
@@ -32,8 +32,9 @@ No garbage collector. No runtime overhead. Just async Rust on `tokio`.
 - **Per-profile workspaces.** Everything an agent owns lives under `~/.rantaiclaw/profiles/<name>/`. Run multiple agents on one host without cross-contamination.
 - **ClawHub + open-skills.** Install community skills from [ClawHub](https://clawhub.ai), or auto-sync the open-skills repo (`besoeasy/open-skills`) every 7 days for a shared baseline.
 - **MCP supervision.** Spawn and restart Model Context Protocol servers as supervised child processes (runtime tool integration is in-progress — see [MCP Servers](/docs/concepts/mcp)).
-- **Agentic tools.** 20+ built-in tools (`shell`, `file_read`, `file_write`, `glob_search`, `cron_*`, `memory_*`, `web_search_tool`, `git_operations`, `pdf_read`, `screenshot`, `image_info`, etc.) with security boundaries.
-- **Three-level autonomy + four onboarding presets.** Runtime states `read_only` / `supervised` / `full`, configured via L1–L4 preset bundles that write `autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` to disk.
+- **Agentic tools.** 20+ built-in tools (`shell`, `file_read`, `file_write`, `glob_search`, `cron_*`, `memory_*`, `web_search_tool`, `git_operations`, `pdf_read`, `screenshot`, `image_info`, etc.). Local capability ships **enabled** since v0.6.89 — `web_search`, `browser`, and `http_request` (default `allowed_domains = ["*"]`) are on and `block_high_risk_commands = false` — so the agent is useful out of the box; deny-by-default is reserved for the *exposure* boundary (localhost bind, `require_pairing = true`, `allow_public_bind = false`, gateway rate limits). Defaults defined in `src/config/schema.rs`.
+- **Three-level autonomy + four onboarding presets.** Runtime states `read_only` / `supervised` / `full`, configured via the **Manual / Smart / Strict / Off** preset bundles (the numeric `L1`–`L4` prefixes were dropped in v0.6.40; legacy ids still parse) that write `autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` to disk.
+- **Knowledge Base.** Part of the default build (the `kb` feature ships by default in `Cargo.toml`). Ingests documents (PDF via the transitively-pulled `rag-pdf`; `.docx` / `.xlsx` with `kb-office`) and answers over them with hybrid lexical + vector recall — plus an optional entity/relation graph layer — configured through `rantaiclaw setup` / `onboard` or the gateway. See [Knowledge Base](/docs/knowledge-base).
 - **Five memory backends.** SQLite (default), Lucid (sqlite + workspace markdown overlay — RantAIClaw-only), Markdown, PostgreSQL, none. Hybrid lexical + vector recall, soul-snapshot for cold-boot survival.
 - **Sandbox auto-detection.** Landlock (Linux) → Firejail → Bubblewrap → Docker → Noop, picked at runtime based on what the host supports.
 - **AEAD secret store.** ChaCha20-Poly1305, master key at `~/.rantaiclaw/.secret_key`, ciphertext stored inline in `config.toml` as `enc2:<hex>`.
@@ -51,9 +52,8 @@ No garbage collector. No runtime overhead. Just async Rust on `tokio`.
 
 ## Project status
 
-RantAIClaw is **alpha** (current `0.6.x` series). Core subsystems — runtime, channels, providers, tools, gateway pairing, audit log, sandbox detection — are stable. Some areas are partially-built and clearly flagged in their respective docs:
+RantAIClaw is **alpha** (current `0.7.x` series). Core subsystems — runtime, channels, providers, tools, gateway pairing, audit log, sandbox detection — are stable. Live config is served over the gateway: `config_api::router()` is mounted in `src/gateway/mod.rs`, exposing `GET`/`PUT /api/v1/config*` for model, autonomy, `mcp_servers`, `channels/telegram`, and knowledge. Some areas remain partially-built and are clearly flagged in their respective docs:
 
-- **Live config (`PATCH /config/*`)** — handlers exist in `src/gateway/config_api.rs` but are not currently mounted on the running router.
 - **MCP runtime tool integration** — supervisor manages MCP processes; agent loop does not yet consume their tools.
 - **Approval timeouts** — `timeout_secs` is written to policy files but no consumer reads it; CLI prompts block indefinitely.
 

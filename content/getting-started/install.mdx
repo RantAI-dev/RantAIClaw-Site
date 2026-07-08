@@ -18,7 +18,7 @@ The script:
 - verifies its SHA256 checksum,
 - installs to `~/.cargo/bin` or `~/.local/bin`,
 - prints the `export PATH=...` line for your shell if needed,
-- **runs `rantaiclaw setup --force` at the end** — the full guided wizard (provider, approvals, channels, persona, skills, MCP). Reattaches `/dev/tty` so prompts still work under `curl | bash`. Pass `--skip-setup` or set `RANTAICLAW_SKIP_SETUP=1` to install only.
+- **runs `rantaiclaw setup --force` at the end** — the full guided wizard (provider, approvals, channels, persona, skills, MCP, Knowledge Base). Reattaches `/dev/tty` so prompts still work under `curl | bash`. Pass `--skip-setup` or set `RANTAICLAW_SKIP_SETUP=1` to install only.
 
 No Rust toolchain. No compiler. No `git clone`.
 
@@ -87,7 +87,7 @@ Open PowerShell and run:
 iwr https://raw.githubusercontent.com/RantAI-dev/RantAIClaw/main/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
-The script detects your architecture, downloads `rantaiclaw-x86_64-pc-windows-msvc.zip` + `SHA256SUMS` from the latest release, verifies the checksum, extracts to `%LOCALAPPDATA%\Programs\rantaiclaw\`, amends your **User** `PATH` via the registry (not `setx` — which truncates at 1024 chars), and **runs `rantaiclaw.exe setup --force` automatically** (full guided wizard — provider, approvals, channels, persona, skills, MCP). Open a new terminal afterwards because cmd.exe / VS Code / Git Bash tabs cache the old `PATH`. Pass `-SkipSetup` or set `$env:RANTAICLAW_SKIP_SETUP=1` to install only.
+The script detects your architecture, downloads `rantaiclaw-x86_64-pc-windows-msvc.zip` + `SHA256SUMS` from the latest release, verifies the checksum, extracts to `%LOCALAPPDATA%\Programs\rantaiclaw\`, amends your **User** `PATH` via the registry (not `setx` — which truncates at 1024 chars), and **runs `rantaiclaw.exe setup --force` automatically** (full guided wizard — provider, approvals, channels, persona, skills, MCP, Knowledge Base). Open a new terminal afterwards because cmd.exe / VS Code / Git Bash tabs cache the old `PATH`. Pass `-SkipSetup` or set `$env:RANTAICLAW_SKIP_SETUP=1` to install only.
 
 **Options** (flags and env vars mirror `bootstrap.sh`):
 
@@ -220,7 +220,7 @@ The binary lives inside the WSL filesystem; invoke it from the WSL shell (or `ws
 
 ### Option 3 — Build from source (MSVC)
 
-Requires Rust 1.92+ (`rustup-init.exe`) and the *Desktop development with C++* workload from Visual Studio Build Tools. Then:
+Requires Rust 1.91+ (`rustup-init.exe`) and the *Desktop development with C++* workload from Visual Studio Build Tools. Then:
 
 ```powershell
 git clone https://github.com/RantAI-dev/RantAIClaw.git
@@ -264,7 +264,9 @@ RantAIClaw uses Cargo features to keep the default binary small. Opt in to the o
 | `browser-native` | Headless browser tool via `fantoccini` |
 | `peripheral-rpi` | Raspberry Pi GPIO peripherals |
 | `probe` | STM32 / Nucleo memory read via `probe-rs` |
-| `rag-pdf` | PDF ingestion via `pdf-extract` |
+| `kb` | Knowledge Base subsystem — `sqlite-vec` vector store + PDF extraction (**part of the default feature set**; pulls in `rag-pdf` transitively) |
+| `kb-office` | Office-document ingestion for the KB (`.docx` / `.xlsx` via `calamine` + `docx-rs`) |
+| `rag-pdf` | PDF ingestion via `pdf-extract` (pulled in transitively by `kb`) |
 | `sandbox-bubblewrap` | Bubblewrap sandbox (the only sandbox path on macOS) |
 | `sandbox-landlock` | (no-op alias kept for backward compat — Landlock is compiled in unconditionally on Linux) |
 

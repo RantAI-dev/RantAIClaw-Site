@@ -1,13 +1,13 @@
 ---
 title: Gateway & Live Config
-description: The HTTP control plane — pairing, webhooks, triggers, and a `/api/v1/*` read surface. Live config is partly built but not currently wired.
+description: The HTTP control plane — pairing, webhooks, triggers, a `/api/v1/*` read surface, live config mutation, and the Knowledge Base API.
 ---
 
 # Gateway & Live Config
 
 The gateway is RantAIClaw's HTTP control plane. It runs alongside the agent — typically inside the `daemon` process — on a configurable port (default `3000`, default bind `127.0.0.1`).
 
-This page describes **what's actually wired into the running router today**, what the auth model looks like, and which planned features exist as code but aren't reachable yet.
+This page describes **what's actually wired into the running router today** and what the auth model looks like.
 
 ## What the gateway is for
 
@@ -15,10 +15,12 @@ This page describes **what's actually wired into the running router today**, wha
 - **Webhook ingress** — receive HTTP webhooks as agent inputs
 - **Channel-specific webhook endpoints** — WhatsApp Cloud, Linq, Nextcloud Talk
 - **Trigger ingress** — `/triggers/{*path}` routes inbound HTTP into skills/messages defined in `webhook-routes.json`
-- **Read-only `/api/v1/*` surface** — sessions, skills, memory, channels, providers, status, doctor
+- **`/api/v1/*` surface** — sessions, skills, memory, channels, providers/models, status, doctor
+- **Live config mutation** — `GET`/`PUT /api/v1/config/*`, secret presence, MCP servers, Telegram connect, Knowledge Base keys, approval resolution
+- **Knowledge Base API** — `/api/v1/kb/*` (documents, search, graph, groups) — see [Knowledge Base](/docs/knowledge-base)
 - **Health and metrics** — `/health`, `/metrics` (Prometheus text)
 
-There is also an implementation of live-config `PATCH /config/*` endpoints in `src/gateway/config_api.rs` — but it is **not currently mounted on the router** (see [Live config — planned, not wired](#live-config--planned-not-wired) below).
+Live-config endpoints in `src/gateway/config_api.rs` **are** mounted — `config_api::router()` is merged onto the app in `src/gateway/mod.rs`, and so is the Knowledge Base router (`crate::kb::axi::api::router()`, when built with the default `kb` feature). See [The mounted live-config surface](#the-mounted-live-config-surface) below.
 
 ## Bind safety
 
@@ -98,8 +100,35 @@ Routes mounted in `src/gateway/mod.rs` plus the `api_v1` router merged on top:
 | GET / PUT | `/api/v1/personality` | bearer |
 | GET | `/api/v1/channels` | bearer |
 | GET | `/api/v1/providers` | none |
+| GET | `/api/v1/providers/{id}/models` | bearer |
+| POST | `/api/v1/providers/{id}/models/refresh` | bearer (fetches live model list) |
+| POST | `/api/v1/approvals/{id}` | bearer (resolve a pending approval) |
+| GET | `/api/v1/config` | bearer |
+| PUT | `/api/v1/config/model` | bearer |
+| PUT | `/api/v1/config/autonomy` | bearer |
+| GET / PUT | `/api/v1/secrets` | bearer (presence-only; keys never returned) |
+| POST / DELETE | `/api/v1/config/mcp_servers/{name}` | bearer |
+| POST / DELETE | `/api/v1/channels/telegram` | bearer |
+| GET / PUT | `/api/v1/config/knowledge` | bearer (`kb` feature; presence-only) |
 
-There is **no** `/config/*` route, **no** `/mcp/servers` route, and **no** `rantaiclaw gateway` subcommand for pairing.
+Knowledge Base router (`src/kb/axi/api.rs`, merged when built with the default `kb` feature). These routes **bypass the gateway-wide 64 KiB body cap and 120 s timeout** — the subtree sets its own larger upload limit (`KB_UPLOAD_MAX_BYTES = 32 MiB`) and longer ingest timeout (`600 s`) so document uploads and per-chunk embeds aren't rejected or cut off:
+
+| Method | Path | Auth |
+|---|---|---|
+| POST | `/api/v1/kb/search` | bearer |
+| POST / GET | `/api/v1/kb/documents` | bearer (POST ingests; GET lists) |
+| GET / DELETE | `/api/v1/kb/documents/{id}` | bearer |
+| GET | `/api/v1/kb/documents/{id}/intelligence` | bearer |
+| POST | `/api/v1/kb/documents/{id}/re-extract` | bearer |
+| GET / POST | `/api/v1/kb/groups` | bearer |
+| GET / PUT / DELETE | `/api/v1/kb/groups/{id}` | bearer |
+| GET / POST | `/api/v1/kb/groups/{id}/documents` | bearer |
+| DELETE | `/api/v1/kb/groups/{id}/documents/{doc_id}` | bearer |
+| GET | `/api/v1/kb/graph` | bearer |
+| GET | `/api/v1/kb/drift` | bearer |
+| POST | `/api/v1/kb/re-embed` | bearer |
+
+See [Knowledge Base](/docs/knowledge-base) for what these endpoints do. There is **no** `/mcp/servers` route (MCP servers are managed via `POST`/`DELETE /api/v1/config/mcp_servers/{name}`), and **no** `rantaiclaw gateway` subcommand for pairing.
 
 ## Webhook authentication — three flavors
 
@@ -141,26 +170,19 @@ Per-client-IP sliding-window rate limits:
 
 Idempotency: `X-Idempotency-Key` header on `/webhook` deduplicates retries within the configured TTL (default 300s).
 
-## Live config — planned, not wired
+## The mounted live-config surface
 
-The repository contains `src/gateway/config_api.rs` with handlers for:
+`src/gateway/config_api.rs` is wired into the running router — `config_api::router()` is merged in `src/gateway/mod.rs` alongside `api_v1::router()`. The mounted, bearer-authenticated handlers are:
 
-- `GET /config`
-- `GET /config/channels`
-- `GET /config/mcp-servers`
-- `PATCH /config/channels` — add/remove channels via `{"<name>": {...}}` or `{"<name>": null}`
-- `PATCH /config/mcp-servers` — start MCP servers
-- `PATCH /config/model` — hot-swap the active model
-- `PATCH /config/tools`
-- `PATCH /config/agent`
+- `GET /api/v1/config` — read the effective config (secrets redacted)
+- `PUT /api/v1/config/model` — hot-swap the active model
+- `PUT /api/v1/config/autonomy` — set the autonomy level
+- `GET`/`PUT /api/v1/secrets` — read/write secret **presence** only; values are never returned
+- `POST`/`DELETE /api/v1/config/mcp_servers/{name}` — add or remove an MCP server entry
+- `POST`/`DELETE /api/v1/channels/telegram` — connect or disconnect a Telegram channel from the console
+- `GET`/`PUT /api/v1/config/knowledge` — read presence / set the Knowledge Base embedding + OCR keys (only when built with the `kb` feature)
 
-These handlers also call `src/config/runtime.rs::write_runtime_section`, which writes to `config.runtime.toml` for persistence across restarts.
-
-**However, as of the current revision, none of these routes are mounted on the running router.** The module isn't declared in `src/gateway/mod.rs`, and the handlers reference `AppState` fields (`channel_registry`, `mcp_registry`, `config_tx`) that don't exist on the actual `AppState` shape. The code compiles in isolation but is unreachable at runtime.
-
-If you've seen earlier docs (or older blog posts) describing live `PATCH /config/*` calls, they describe an intended feature that hasn't shipped. The infrastructure exists — pairing, persistence, the runtime config file — but the wiring is incomplete.
-
-For now, configuration changes require restarting the agent (or the daemon's component supervisor will restart the relevant subsystem on its own backoff loop after a process exit).
+Note the shapes are `GET`/`PUT`/`POST`/`DELETE` on concrete paths — not an old `PATCH /config/*` design. Writes call `Config::save()`, so they persist to `config.toml` and survive a restart. The Knowledge Base router (`crate::kb::axi::api::router()`) is merged the same way and adds the `/api/v1/kb/*` surface — see [Knowledge Base](/docs/knowledge-base).
 
 ## What the daemon does with the gateway
 
@@ -177,6 +199,7 @@ Each component is supervised with exponential backoff restart on crash, so a mis
 - `src/gateway/mod.rs` — server bootstrap, route registration, handlers for `/health`, `/metrics`, `/pair`, `/webhook`, channel webhooks, triggers
 - `src/gateway/api_v1.rs` — the `/api/v1/*` router and bearer-auth middleware
 - `src/gateway/task_handlers.rs` — `/tasks/*` handlers
-- `src/gateway/config_api.rs` — **not mounted today**; planned live-config surface
+- `src/gateway/config_api.rs` — mounted live-config surface (`config_api::router()`, merged in `mod.rs`)
+- `src/kb/axi/api.rs` — the `/api/v1/kb/*` Knowledge Base router (merged when the `kb` feature is built; larger body/timeout caps)
 - `src/security/pairing.rs` — pair flow, token generation, hash storage, constant-time compare
-- `src/config/runtime.rs` — `write_runtime_section` and `load_with_runtime_overrides` (the latter not yet called from production)
+- `src/security/pairing_store.rs` — on-demand `channels pair` codes (SHA-256-hashed, `0600`, TTL + max-uses)

@@ -1,0 +1,70 @@
+---
+title: Knowledge Base
+description: An organization-level document store — SQLite + sqlite-vec vectors + FTS5/BM25 — that the agent, the CLI, and the HTTP API all query. Ships enabled by default and is strictly separate from agent memory.
+---
+
+# Knowledge Base
+
+The Knowledge Base (KB) is RantAIClaw's document store: it ingests PDFs, markdown, office files, images, and source code, then answers questions over them with hybrid vector + keyword retrieval. It is the subsystem behind `src/kb/` in the crate.
+
+> **Not the same thing as memory.** The KB holds *organization-level documents* — the policies, manuals, and reports you want the agent to consult. The agent's short-term/long-term conversation state lives in a completely separate subsystem (`src/memory/`, see [Concepts → Memory](/docs/concepts/memory)). The two stores have different lifecycles, different schemas, and different access paths. `docs/kb.md` stresses this repeatedly: do not conflate "rantaiclaw memory" with "rantaiclaw kb".
+
+## Enabled by default
+
+The KB is compiled in by default. In `Cargo.toml` the `kb` feature is part of the default set:
+
+```toml
+[features]
+default = ["tui", "whatsapp-web", "remote-install", "kb"]
+```
+
+So a stock build ships with `rantaiclaw kb …`, the `/api/v1/kb/*` routes, and the agent's ambient KB awareness already present. Office-document ingestion (`.docx`, `.xlsx`) is the one part that is *not* default — it lives behind the additional `kb-office` feature (`kb-office = ["kb", "dep:calamine", "dep:docx-rs"]`). See [Ingesting Documents](/docs/knowledge-base/ingesting).
+
+## Architecture
+
+- **Storage** — SQLite. Vectors live in a `sqlite-vec` virtual table; lexical search runs over an FTS5 (BM25) index. One `kb.db` per deployment. The store lives in `src/kb/store/sqlite/`.
+- **Embedding** — OpenRouter by default (`qwen/qwen3-embedding-8b` at `4096` dimensions), defined in `src/kb/config.rs`. A Text Embeddings Inference (TEI) sidecar is supported for air-gapped deployments.
+- **Retrieval** — hybrid: a vector arm and a BM25 arm fused via Reciprocal Rank Fusion, with an optional reranker and optional query expansion. See [Searching & Retrieval](/docs/knowledge-base/search-retrieval).
+- **Extraction** — a smart-router PDF pipeline (text-layer first, OCR fallback) plus per-type handlers for markdown, text, images, and office files. See [Ingesting Documents](/docs/knowledge-base/ingesting).
+- **Document Intelligence** — optional entity/relation extraction that builds a cross-document knowledge graph, and an optional GraphRAG arm that feeds that graph back into retrieval. Off by default. See [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence).
+
+### Where `kb.db` lives
+
+The database path resolves in this order (`resolve_kb_db_path` in `src/kb/axi/cli.rs`):
+
+1. `KB_DB_PATH` env var, when non-empty.
+2. The platform data directory via `directories::ProjectDirs` — `~/.local/share/rantaiclaw/kb.db` on Linux, `~/Library/Application Support/rantaiclaw/kb.db` on macOS.
+3. `./kb.db` in the current working directory — the final fallback for containers without a HOME.
+
+## Three ways to consume the KB
+
+The same store and retrieval pipeline are exposed through three surfaces:
+
+| Surface | Consumer | Output |
+|---|---|---|
+| In-process Rust API | RantAIClaw's own agent loop | — |
+| `rantaiclaw kb …` CLI | operators, scripts, the agent's shell tool | TOON (JSON on `--json`) |
+| `/api/v1/kb/*` HTTP API | web clients, external orchestrators | JSON |
+
+### The agent's path (axi-ambient)
+
+There is intentionally **no `Tool` trait implementation for the KB**. Instead, when the KB feature is compiled in *and* a `kb.db` exists at the resolved path, the agent loop injects a short ambient line into the system prompt telling the model it can shell out to `rantaiclaw kb search "<question>" --top 5` (`kb_ambient_context` in `src/kb/axi/ambient.rs`). The agent then uses its existing `shell` capability under the normal policy + autonomy gates — no MCP server, no tool registration, no schema declaration.
+
+Because it rides on the shell path, autonomy still applies: if the active preset doesn't permit `rantaiclaw` in the shell allowlist, the agent simply can't reach the KB. When no `kb.db` exists yet, the ambient line is never injected, so the agent never learns about a capability it can't use — the correct deny-by-default behavior.
+
+### The CLI
+
+`rantaiclaw kb` is an "axi-cli" surface: idempotent, never interactive, TOON output by default, `--json` for scripted callers. The subcommands are `search`, `ingest`, `list`, `get`, `delete`, `drift`, `re-embed`, `intelligence`, and `graph`.
+
+### The HTTP API
+
+When the gateway runs, the `/api/v1/kb/*` routes are mounted (search, document CRUD, groups, drift, re-embed, intelligence, graph). They share the gateway's pairing/bearer auth: when `[gateway].require_pairing = false`, requests pass through. See [CLI & HTTP API Reference](/docs/knowledge-base/reference).
+
+## Read on
+
+- [Ingesting Documents](/docs/knowledge-base/ingesting) — supported types, the smart-router PDF pipeline, upload limits.
+- [Searching & Retrieval](/docs/knowledge-base/search-retrieval) — hybrid retrieval, RRF, reranking, tuning.
+- [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence) — the cross-document knowledge graph.
+- [Configuration & Keys](/docs/knowledge-base/configuration) — every `KB_*` knob and where the keys come from.
+- [CLI & HTTP API Reference](/docs/knowledge-base/reference) — subcommand flags and endpoint shapes.
+- [Reference → Configuration](/docs/reference/config) — the top-level `config.toml` schema.

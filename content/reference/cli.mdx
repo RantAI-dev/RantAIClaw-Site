@@ -21,22 +21,25 @@ These work on every subcommand:
 | Command | Purpose |
 |---|---|
 | `rantaiclaw onboard` | Original interactive setup wizard (kept for backward compat) |
-| `rantaiclaw setup` | Canonical interactive setup; subcommands `setup mcp`, `setup hardware`, etc. |
-| `rantaiclaw autonomy <preset>` | Switch the runtime autonomy preset (writes `policy/autonomy.toml`) |
+| `rantaiclaw setup` | Canonical interactive setup; single-section topics like `setup mcp`, `setup knowledge`, etc. |
+| `rantaiclaw autonomy [<preset>]` | Show or switch the approval-policy preset; writes the three `policy/*.toml` files and mirrors `[autonomy].level` / `[autonomy].allowed_commands` into `config.toml` |
 | `rantaiclaw agent` | Run an agent — interactive REPL (no flag) or one-shot (`--message`) |
 | `rantaiclaw chat` | Launch the terminal UI (TUI) — requires the `tui` feature |
+| `rantaiclaw ui <subcommand>` | Install / run the optional web console (claw-ui); fetched on demand, needs a JS runtime |
 | `rantaiclaw daemon` | Production daemon — gateway + all channels + scheduler + heartbeat |
 | `rantaiclaw gateway [--port P] [--host H]` | Run only the gateway HTTP server (no channels) |
-| `rantaiclaw service` | Generate / install systemd / launchd / Windows service definitions |
-| `rantaiclaw doctor` | Validate install + config (exit 0 = pass, 1 = fail) |
+| `rantaiclaw service [--service-init auto\|systemd\|openrc] <sub>` | Manage the user-level OS service (`install`/`start`/`stop`/`restart`/`status`/`uninstall`) |
+| `rantaiclaw doctor [--format text\|json\|brief] [--brief] [--offline]` | Run diagnostics (config + live + system); `doctor models` probes provider catalogs |
 | `rantaiclaw status` | Print runtime status |
 | `rantaiclaw config schema` | Export the config JSON Schema (no other subcommands today) |
 | `rantaiclaw memory <subcommand>` | List, get, stats, clear memory entries |
+| `rantaiclaw kb <subcommand>` | Knowledge Base CRUD + maintenance (built in by default; `kb` feature) |
 | `rantaiclaw skills <subcommand>` | List, show, install, remove skills (note: plural `skills`) |
 | `rantaiclaw cron <subcommand>` | Manage cron jobs |
-| `rantaiclaw models` | List models known to the active provider config |
+| `rantaiclaw models refresh [--provider] [--force]` | Refresh cached provider model catalogs (only `refresh` exists) |
 | `rantaiclaw providers` | List configured providers |
-| `rantaiclaw channel <subcommand>` | Channel management |
+| `rantaiclaw channel <subcommand>` | Channel management (aliased `channels`) |
+| `rantaiclaw permissions <subcommand>` | Per-role channel permissions (owners + the non-owner "guest" ceiling) |
 | `rantaiclaw integrations` | External service integrations |
 | `rantaiclaw migrate` | Run profile / config migrations |
 | `rantaiclaw auth <subcommand>` | OAuth flows, device-code logins (Codex, Anthropic subscription, etc.) |
@@ -52,6 +55,8 @@ These work on every subcommand:
 | `rantaiclaw completions <shell>` | Print shell completion script |
 
 For exact flag names and behavior, run `rantaiclaw <command> --help`.
+
+> `rantaiclaw service` manages a user-level unit; `--service-init` selects the init system — `auto` (detect), `systemd`, or `openrc` (validated in `src/main.rs`). Since v0.6.92, `service start` restarts an already-running unit instead of being a silent no-op, so a config/channel change takes effect without a manual restart.
 
 ## Notable absences
 
@@ -93,6 +98,29 @@ rantaiclaw profile use work
 
 ## Subcommand surface (selected)
 
+### `rantaiclaw setup`
+
+```bash
+setup                       # full wizard; walks every wired section, skips already-configured
+setup --force               # re-run every section
+setup --non-interactive     # emit each section's headless hint and exit (also implied in non-TTY)
+setup <topic>               # re-run a single section
+setup <topic> --force
+```
+
+Wired sections (each is also a valid `<topic>`): `provider`, `approvals`, `channels`, `persona`, `skills`, `mcp`, and — because the `kb` feature is on by default — `knowledge` (defined in `src/onboard/wizard.rs`).
+
+```bash
+setup provider              # re-run the provider section only
+setup channels              # re-run the channels section only
+setup knowledge             # set the encrypted Knowledge Base API keys (v0.7.0)
+setup whatsapp-web --non-interactive   # headless WhatsApp Web QR pairing
+```
+
+> `setup knowledge` writes the encrypted `[knowledge]` block (`embedding_api_key` / `vision_api_key`, stored as `enc2:<hex>`; vision falls back to the embedding key). Env `KB_EMBEDDING_API_KEY` / `KB_EXTRACT_VISION_API_KEY` override config at load, with `OPENROUTER_API_KEY` as the final fallback. See the [Knowledge Base configuration](/docs/knowledge-base/configuration) page.
+
+`onboard` is a legacy alias for `setup` and keeps the older quick-mode flags (`--api-key`, `--provider`, `--model`, `--memory`, `--channels-only`, `--interactive`, `--force`).
+
 ### `rantaiclaw memory`
 
 ```bash
@@ -118,17 +146,26 @@ skills remove <name>
 
 ```bash
 cron list
-cron add <name> <cron-expression> <prompt>
-cron add-at <name> <iso-datetime> <prompt>
-cron add-every <name> <interval> <prompt>   # interval e.g. "30s", "5m", "1h"
-cron once <prompt>                          # fire-and-forget one-shot
+cron add <expression> [--tz <IANA_TZ>] <command>   # 5-field cron; command is a positional, no name
+cron add-at <rfc3339-timestamp> <command>          # one-shot at an RFC 3339 time
+cron add-every <every_ms> <command>                # fixed interval in MILLISECONDS (e.g. 60000)
+cron once <delay> <command>                         # one-shot delay, e.g. "30m", "2h", "1d"
 cron remove <id>
-cron update <id> [--name ...] [--prompt ...] [--schedule ...]
+cron update <id> [--expression <expr>] [--tz <tz>] [--command <cmd>] [--name <name>]
 cron pause <id>
 cron resume <id>
 ```
 
-> `cron run` and `cron runs` are tool names (LLM-callable), not CLI subcommands.
+Examples:
+
+```bash
+cron add '0 9 * * 1-5' 'Good morning' --tz America/New_York
+cron add-at 2026-01-15T14:00:00Z 'Send reminder'
+cron add-every 60000 'Ping heartbeat'
+cron once 30m 'Run backup in 30 minutes'
+```
+
+> Mutating cron actions require `cron.enabled = true`. `cron run` / `cron runs` are LLM-callable tool names, not CLI subcommands.
 
 ### `rantaiclaw profile`
 
@@ -152,14 +189,95 @@ config schema    # prints the JSON Schema (powered by schemars derive). No flags
 
 OAuth and subscription-based login flows (Codex device-code, Anthropic Claude.ai subscription, etc.).
 
+All flows take `--provider` as a **flag** (required), not a positional. `--profile` defaults to `default`.
+
 ```bash
-auth login [--provider <name>]      # browser device-code or auth-URL flow
-auth paste-redirect <url>           # paste redirect URL when the browser can't auto-complete
-auth paste-token <token>            # paste an opaque token (provider-dependent)
-auth setup-token                    # generate a long-lived setup token
-auth refresh                        # refresh access tokens for the active provider
-auth use <provider>                 # set the active auth profile
-auth list                           # list all stored auth entries
-auth status                         # show currently active auth + expiry
-auth logout [--provider <name>]     # revoke and remove stored credentials
+auth login --provider <name> [--profile <name>] [--device-code]
+auth paste-redirect --provider <name> [--profile <name>] [--input <url-or-code>]
+auth paste-token --provider <name> [--profile <name>] [--token <tok>] [--auth-kind <authorization|api-key>]
+auth setup-token --provider <name> [--profile <name>]   # alias for paste-token, interactive
+auth refresh --provider <name> [--profile <name>]
+auth use --provider <name> --profile <name>             # set active profile for a provider
+auth logout --provider <name> [--profile <name>]
+auth list                                                # list stored auth profiles
+auth status                                              # active profile + token expiry
 ```
+
+Example:
+
+```bash
+auth paste-redirect --provider openai-codex --input https://example.com/callback?code=...
+```
+
+### `rantaiclaw channel`
+
+Aliased `rantaiclaw channels`.
+
+```bash
+channel list                        # list configured channels
+channel start                       # start all configured channels (foreground)
+channel run                         # alias of start with a louder startup banner
+channel doctor                      # health-check configured channels
+channel add <type> <config-json>    # e.g. channel add telegram '{"bot_token":"...","name":"my-bot"}'
+channel remove <name>
+channel bind-telegram <identity>    # add a username (no '@') or numeric user ID to the allowlist
+channel unbind-telegram <identity>  # remove an identity, or the '*' wildcard
+channel pair [--channel telegram] [--ttl 15] [--max-uses <n>] [--no-owner]
+```
+
+`channel pair` mints a time-windowed, multi-claim pairing code into the shared store — a running channel validates it on the next `/bind` / `/claim` message, so **no daemon restart is needed**. `--ttl` is in minutes (default 15), `--max-uses` defaults to unlimited, and `--no-owner` restricts the code to chat-only `/bind` (no owner `/claim`).
+
+Universal self-onboarding: an unenrolled sender messages `/bind <code>` to add themselves to the channel allowlist, or an owner sends `/claim <code>` to also land in `approval_owners`. Both are handled by the shared channel core, so the same flow works across Telegram, Discord, Slack, Lark, Mattermost, and the other multi-user channels.
+
+### `rantaiclaw permissions`
+
+Manages the per-role permission model shared by every multi-user channel. **Owners** (senders in `approval_owners`) get the full toolset and may approve tool calls; everyone else who can chat is a **guest** whose turns run under a capability ceiling you set here. The CLI/console operator is always an owner.
+
+```bash
+permissions show                                # current owners + the guest ceiling
+permissions add owner <identity>                # numeric Telegram ID, or username on Slack/Discord/etc
+permissions add tool <tool-name>                # widen which tools guests may trigger
+permissions add command '<glob>'                # guest shell-command allowlist, e.g. 'kubectl get *'
+permissions add allow-command <basename>        # owner allowlist (autonomy.allowed_commands), e.g. kubectl
+permissions remove <owner|tool|command|allow-command> <value>
+```
+
+> The `command` target takes a shell-command **glob** (`"kubectl get *"`) and governs guests. The `allow-command` target (added v0.6.84) takes a command **basename** (`kubectl`) and edits `autonomy.allowed_commands` — the commands an owner may run without an approval prompt. Basenames here, not globs.
+
+### `rantaiclaw ui`
+
+Installs and runs the optional web console (claw-ui). It is a separate Next.js app fetched on demand into `~/.rantaiclaw/ui` — not bundled in the binary, and it needs a JavaScript runtime (bun or npm).
+
+```bash
+ui install [--dir <path>] [--ref <tag-or-branch>] [--force]
+ui start [--dir <path>] [--port <p>] [--gateway <url>] [--token <bearer>]
+ui stop [--dir <path>]
+ui path [--dir <path>]              # print the install directory
+```
+
+`ui start` serves the console on port **3939** by default. `--gateway` defaults to the `[gateway]` config (falling back to the existing `.env.local`), and `--token` is remembered in `.env.local` (omit to keep the existing one or `$RANTAICLAW_TOKEN`).
+
+```bash
+ui install
+ui start --gateway http://127.0.0.1:3055 --port 3939
+```
+
+### `rantaiclaw kb`
+
+Knowledge Base surface, built into the default binary (the `kb` feature is in `Cargo.toml`'s `default` set). Output is token-efficient **TOON by default**; pass `--json` on read commands to emit JSON instead. Operations target the KB database from `KB_DB_PATH` (env) or the platform data dir (`~/.local/share/rantaiclaw/kb.db` on Linux). Exit `0` is success, `1` is an operational failure (a TOON `error[...]` block is printed to stdout).
+
+```bash
+kb search <query> [--top 5] [--group <id>]... [--category <c>] [--json]
+kb ingest <path> [--title <t>] [--category <c>]... [--group <id>]... [--json]
+kb list [--organization <id>] [--json]
+kb get <id> [--json]
+kb delete <id> [--hard]             # soft-delete by default; --hard removes rows permanently
+kb drift [--json]                   # chunks embedded with a stale model
+kb re-embed [--include-current] [--dry-run] [--batch-size 100] [--json]
+kb intelligence <document-id> [--json]   # entities + relations for one document
+kb graph [--group <id>] [--limit <n>] [--json]   # cross-document entity graph
+```
+
+> Re-extracting a document's entities/relations is **HTTP-only** (`POST /api/v1/kb/documents/{id}/re-extract`), not a CLI verb.
+
+See the [Knowledge Base reference](/docs/knowledge-base/reference) for the full command contract, plus [ingesting](/docs/knowledge-base/ingesting), [search & retrieval](/docs/knowledge-base/search-retrieval), and [document intelligence](/docs/knowledge-base/document-intelligence).

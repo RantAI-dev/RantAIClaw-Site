@@ -5,31 +5,50 @@ description: Container layout, environment variables, persistent volumes, and he
 
 # Deploying with Docker
 
-> **v1 status:** stub. Full Dockerfile walkthrough TBD. The rantaiclaw repo ships a [`Dockerfile`](https://github.com/RantAI-dev/RantAIClaw/blob/main/Dockerfile) and [`docker-compose.yml`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docker-compose.yml) you can use directly.
+> **v1 status:** stub. Full Dockerfile walkthrough TBD. The rantaiclaw repo ships a [`Dockerfile`](https://github.com/RantAI-dev/RantAIClaw/blob/main/Dockerfile) and [`docker-compose.yml`](https://github.com/RantAI-dev/RantAIClaw/blob/main/docker-compose.yml) you can use directly. The default container command is `rantaiclaw gateway` (`ENTRYPOINT rantaiclaw`, `CMD gateway`), exposing port `3000`.
 
-## Volumes you should mount
+## Volume you should mount
 
-| Host path | Container path | Why |
+The image keeps everything under a single `$HOME` directory — `/rantaiclaw-data` — set in the `Dockerfile` (`HOME=/rantaiclaw-data`, `WORKDIR /rantaiclaw-data`). Mount **one** named volume there and every piece of state survives restarts.
+
+| Container path | Holds | Persist? |
 |---|---|---|
-| `./config/` | `/etc/rantaiclaw/` | Static config (`config.toml`, persona files) |
-| `./data/` | `/var/lib/rantaiclaw/` | Memory DB, secret store, audit log |
-| `./skills/` | `/usr/local/share/rantaiclaw/skills/` | Installed skills (read-only is fine) |
+| `/rantaiclaw-data` (`$HOME`) | `.rantaiclaw/config.toml`, `workspace/`, memory DB, secret store, audit log, installed skills, and the [Knowledge Base](/docs/knowledge-base) database | Yes — mount a named volume |
+
+The shipped `docker-compose.yml` does exactly this:
+
+```yaml
+volumes:
+  - rantaiclaw-data:/rantaiclaw-data
+```
+
+Inside the container the config lives at `/rantaiclaw-data/.rantaiclaw/config.toml` and the workspace at `/rantaiclaw-data/workspace` — the running user is the non-root `65534:65534`, so a named volume avoids host-permission friction.
 
 ## Health check
 
 ```yaml
 healthcheck:
-  test: ["CMD", "rantaiclaw", "doctor"]
-  interval: 30s
+  test: ["CMD", "rantaiclaw", "status"]
+  interval: 60s
   timeout: 10s
   retries: 3
-  start_period: 30s
+  start_period: 10s
 ```
 
-`rantaiclaw doctor` exits non-zero on any failed check, making it a clean Docker `HEALTHCHECK` target.
+The shipped `docker-compose.yml` uses the lightweight `rantaiclaw status` rather than the heavier `rantaiclaw doctor` (which runs full daemon/scheduler/channel diagnostics). For images that include `curl`, `curl -f http://localhost:3000/health` is an equivalent target — `/health` is an always-public gateway route (`src/gateway/mod.rs`).
+
+## Gateway exposure inside Docker
+
+The gateway config keys are `host`, `port`, `require_pairing`, and `allow_public_bind`, all under `[gateway]` (defined in `src/config/schema.rs`). Outside a container the defaults are deliberately locked down: `host = "127.0.0.1"`, `allow_public_bind = false`, `require_pairing = true`. The runtime **refuses to start** if `host` is a public address (e.g. `0.0.0.0` / `[::]`) unless a tunnel is configured or `allow_public_bind = true` is set.
+
+Inside a container that loopback default would make the published port unreachable, so the shipped image sets `host = "[::]"` and `allow_public_bind = true`. This is *not* an open door: `require_pairing = true` still gates every request, and you control exposure by which host port you publish and to what network.
+
+- Do not treat `allow_public_bind = true` in the image as "safe to expose to the internet" — it only relaxes the in-container bind check.
+- Keep `require_pairing = true` (the default). Every gateway client must pair first.
+- Publish the host port to a trusted network only. For host-only access, bind the published port to loopback (`127.0.0.1:3000:3000`); for anything wider, front the gateway with a tunnel or reverse proxy.
 
 ## Common pitfalls
 
-- **Empty channel allowlist.** Channels with no allowlist are silently offline. Fail fast by failing CI when `rantaiclaw doctor` reports `[WARN]` on an enabled channel.
-- **Missing `allow_public_bind`.** If you set `bind = "0.0.0.0"` in `[gateway]`, you must also set `allow_public_bind = true`. The agent refuses to start otherwise.
-- **Sandbox feature mismatch.** Building with `sandbox-landlock` and running on a kernel < 5.13 means the runtime falls back to allowlist-only enforcement and logs a warning. Pin your base image to a kernel that supports your sandbox features.
+- **Empty channel allowlist.** A channel with an empty allowlist is offline, not open (deny-by-default). Run `rantaiclaw doctor` in CI and fail on any non-OK result to catch a channel that is enabled but unreachable.
+- **Forgetting `allow_public_bind`.** If you set `host = "0.0.0.0"` (or `[::]`) in `[gateway]` you must also set `allow_public_bind = true`, or the gateway refuses to start. Only do this behind pairing plus a trusted network boundary.
+- **Landlock kernel support.** On Linux the Landlock sandbox compiles automatically (the legacy `sandbox-landlock` feature flag is now a no-op) and activates at runtime on kernel 5.13+; on older kernels the runtime falls back to allowlist-only enforcement. Pin a base image with kernel 5.13+ for full sandboxing.

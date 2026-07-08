@@ -146,9 +146,40 @@ rantaiclaw skills show <name>
 rantaiclaw skills install <git-url>
 rantaiclaw skills install <local-path>
 rantaiclaw skills remove <name>
+rantaiclaw skills update <slug>        # re-pull one installed ClawHub skill at its latest version
+rantaiclaw skills update --all         # re-pull every installed ClawHub skill
+rantaiclaw skills inspect <slug>       # ClawHub metadata + security scan, before installing
 ```
 
 `install` clones a git repo or copies a local directory into `<profile>/skills/<slug>/`.
+
+`update` re-pulls ClawHub-installed skills at their latest version (local-path / git skills are skipped — `git pull` or re-install those manually). `inspect` hits ClawHub's public API to show metadata + a security scan for a slug *without* installing it. Both subcommands are defined by `SkillCommands` in `src/main.rs`.
+
+## Skill tools available to the agent
+
+Beyond the human-facing CLI, the agent can manage skills mid-conversation through built-in tools. They are ordinary tools subject to the normal approval/autonomy gates:
+
+| Tool | Defined in | What it does |
+|---|---|---|
+| `skills_list` | `src/tools/skills_meta.rs` | List the skills installed in the active profile |
+| `skill_view` | `src/tools/skills_meta.rs` | Show one installed skill's metadata |
+| `skills_search` | `src/tools/skills_meta.rs` | Search discoverable skills |
+| `skills_install` | `src/tools/skills_install.rs` | Install a skill from a URL or local path |
+| `skills_install_deps` | `src/tools/skills_install.rs` | Install a skill's declared binary dependencies |
+| `author_skill` | `src/tools/author_skill.rs` | Scaffold a brand-new local skill (see below) |
+
+## Agent-authored skills (`author_skill`)
+
+> Added in v0.6.77.
+
+Ask the agent "make me a skill that does X" and the `author_skill` tool (`src/tools/author_skill.rs`) scaffolds a brand-new skill for you. It writes a loader-valid `SKILL.md` into the active profile's `skills/<slug>/` directory, where the loader picks it up on the next turn (restart channel runtimes to pick it up immediately).
+
+- **Only `name` + `description` are required.** If you omit `instructions`, the tool fills in sensible defaults, so even a minimal call produces a complete, valid skill. Optional `tools` (built-in tool names the skill relies on), `tags`, and `overwrite` are also accepted.
+- **The slug is sanitized** from the name to a filesystem-safe `[a-z0-9-]` form — path traversal (`..`, `/`) is impossible by construction.
+- **It never overwrites an existing skill** unless you pass `overwrite: true`.
+- **It is approval-gated** — in Supervised mode you are prompted before the file is written, mirroring the `skills_install` flow.
+
+Skills are data, not compiled code: an authored skill's "tools" are references to the agent's existing built-in tools (`shell`, `web_search`, `file_read`, …), exactly what the `SKILL.md` loader expects. For structured, LLM-callable skill tools, hand-write a `SKILL.toml` instead.
 
 ## Publishing to ClawHub
 

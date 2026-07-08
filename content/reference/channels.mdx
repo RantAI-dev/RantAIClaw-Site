@@ -9,7 +9,7 @@ description: Built-in communication channels and their configuration. Allowlist 
 
 ## Built-in channels
 
-Slugs below match `[channels.<slug>]` blocks in `config.toml` exactly.
+Slugs below match `[channels_config.<slug>]` blocks in `config.toml` exactly (the top-level section is `[channels_config]` — the `channels_config` field on `Config`, defined in `src/config/schema.rs`; there is no `[channels]` alias).
 
 | Slug | Status | Cargo feature | Transport |
 |---|---|---|---|
@@ -26,18 +26,17 @@ Slugs below match `[channels.<slug>]` blocks in `config.toml` exactly.
 | `slack` | Always-on | (default) | Socket Mode / Web API |
 | `telegram` | Always-on | (default) | Long-poll API |
 | `webhook` | Always-on | (default) | Inbound HTTP webhook (signed) |
-| `whatsapp` | Always-on (Cloud API) | (default) | Cloud API |
-| `whatsapp_web` | Feature-gated | `whatsapp-web` | Multi-device protocol via `wa-rs` |
+| `whatsapp` | Always-on | (default) | Cloud API **or** WhatsApp Web (`wa-rs`) — mode auto-detected |
 | `lark` | Feature-gated | `channel-lark` | WebSocket |
 | `matrix` | Feature-gated | `channel-matrix` | Matrix SDK with E2EE |
 
-> `cli` and `qr_terminal` are internal modules (REPL stdin/stdout and pairing UI) and are **not** configurable channel slugs — they have no `[channels.cli]` / `[channels.qr_terminal]` block.
+> `cli` and `qr_terminal` are internal modules (REPL stdin/stdout and pairing UI) and are **not** configurable channel slugs — they have no `[channels_config.cli]` / `[channels_config.qr_terminal]` block.
 
-There is no separate `whatsapp-cloud` slug — Cloud API is just `whatsapp`. The Web variant requires the `whatsapp-web` Cargo feature.
+There is a single `whatsapp` slug — there is no separate `whatsapp-cloud` or `whatsapp_web` slug. Cloud API vs WhatsApp Web is selected **inside the same `[channels_config.whatsapp]` block**: set `phone_number_id` for Cloud API mode, or `session_path` for Web mode. The backend is auto-detected (`WhatsAppConfig::backend_type` in `src/config/schema.rs`; when both selectors are present, Cloud is preferred). The `whatsapp-web` Cargo feature is **on by default** (`default = ["tui", "whatsapp-web", "remote-install", "kb"]` in `Cargo.toml`), so Web mode ships enabled — unlike `lark`/`matrix`, it is not opt-in.
 
 ## Allowlist key names
 
-Each channel has its own `[channels.<slug>]` block with channel-specific keys. The allowlist key name varies:
+Each channel has its own `[channels_config.<slug>]` block with channel-specific keys. The allowlist key name varies:
 
 | Channel | Allowlist key | Default behavior on empty |
 |---|---|---|
@@ -53,13 +52,13 @@ Each channel has its own `[channels.<slug>]` block with channel-specific keys. T
 | `nextcloud_talk` | `allowed_users` | Offline |
 | `imessage` | `allowed_contacts` | Offline |
 | `signal` | `allowed_from` | Offline |
-| `whatsapp`, `whatsapp_web` | `allowed_numbers` | Offline |
+| `whatsapp` (Cloud + Web) | `allowed_numbers` | Offline |
 | `email` | `allowed_senders` | **Allow-all** (exception) |
 | `linq` | `allowed_senders` | (per-deployment) |
 
 Most allowlists support a wildcard entry `"*"` to allow-all explicitly. Email's `allowed_senders` accepts both full addresses (`alice@example.com`) and domain prefixes (`@example.com`).
 
-## Common config keys (per channel)
+## Common config keys (per `[channels_config.<slug>]`)
 
 | Key | Description |
 |---|---|
@@ -69,14 +68,57 @@ Most allowlists support a wildcard entry `"*"` to allow-all explicitly. Email's 
 
 For complete per-channel schemas (transport-specific keys, app secrets, signing tokens), see the upstream `docs/channels-reference.md` until this site has its generated reference.
 
+## Self-onboarding & pairing
+
+Instead of hand-editing an allowlist, admit a new user with an on-demand pairing code (since v0.6.82; implemented in `src/channels/pairing.rs` and `src/security/pairing_store.rs`). This works across **every multi-user channel**: Telegram, Discord, Slack, Mattermost, Matrix, Signal, WhatsApp (Cloud + Web), IRC, Lark, DingTalk, QQ, Linq, Nextcloud Talk, and iMessage.
+
+Mint a code from the CLI without restarting the daemon:
+
+```bash
+rantaiclaw channels pair [--channel <name>] [--ttl <min>] [--max-uses <n>] [--no-owner]
+```
+
+- `--channel` (default `telegram`) scopes the code to one surface.
+- `--ttl` (default `15`) is the validity window in minutes.
+- `--max-uses` bounds the number of claims (omit for unlimited within the window).
+- `--no-owner` makes the code chat-only (`/bind`), rejecting owner `/claim`.
+
+The code lands in a **shared on-disk store** that a **running daemon picks up on the next `/bind` / `/claim` — no restart**. In the target chat:
+
+- `/bind <code>` grants chat access — appends the sender's native identity to that channel's allowlist.
+- `/claim <code>` does the same **and** makes the sender an approval owner — also appends to `channels_config.approval_owners`.
+
+Codes are **surface-scoped** (a code minted for one channel cannot be claimed on another), **SHA-256-hashed at rest** in a `0600` store, and bounded by **TTL + max-uses**. There is no `config.toml` schema change.
+
+Two alternatives mint the same kind of code:
+
+- The owner-only in-chat `issue_pairing_code` tool (`src/tools/issue_pairing_code.rs`; guests are denied via `GuestGate::OWNER_ONLY_TOOLS`).
+- The TUI `/pair` command.
+
 ## Notable channel-specific behavior
 
-- **Telegram** supports runtime allowlist mutation — `add_allowed_identity_runtime` lets the agent add an allowed user without restart. No other channel currently supports this.
+- **Runtime allowlist mutation (all multi-user channels)** — since v0.6.82 every multi-user channel appends the paired sender to its allowlist at runtime via `/bind` / `/claim`, so no channel needs a config edit + restart to admit a new user (see [Self-onboarding & pairing](#self-onboarding--pairing)). Telegram additionally ships a dedicated `channel unbind-telegram` CLI (see [Telegram management](#telegram-management)).
 - **Email** is the only channel that allows-all on empty allowlist. Set explicit `allowed_senders` to restrict.
 - **Discord** and **Slack** support the channel-trait draft-update API — the agent can edit a sent message in place. Useful for streaming responses incrementally.
-- **WhatsApp Cloud (`whatsapp`)** uses Meta's `X-Hub-Signature-256` HMAC verification on incoming webhooks (when `app_secret` is set).
+- **WhatsApp Cloud** uses Meta's `X-Hub-Signature-256` HMAC verification on incoming webhooks (when `app_secret` is set).
+- **WhatsApp Web** uses `wa-rs` with a custom rusqlite storage backend; enabled by the default-on `whatsapp-web` feature and selected by setting `session_path`.
 - **Matrix** requires the `channel-matrix` feature at build time and uses `matrix-sdk` for E2EE.
-- **WhatsApp Web (`whatsapp_web`)** requires the `whatsapp-web` feature; uses `wa-rs` with a custom rusqlite storage backend.
+
+### WhatsApp Web and privacy LIDs
+
+WhatsApp Web often delivers direct chats via a privacy **LID** (`<id>@lid`) rather than a phone number. The runtime resolves LID→phone number via wa-rs's learned `lid_pn_cache` mapping, so:
+
+- owner (`approval_owners`) and `allowed_numbers` matching run on the **real phone number**, and
+- replies (and the typing indicator) route to the **phone-number thread**, not a hidden LID thread the recipient never sees.
+
+Unmapped LIDs keep the prior behavior. Put your real number in `allowed_numbers` — you no longer need `"*"`. (v0.6.91 reply routing; v0.6.93 owner/allowlist resolution)
+
+### Telegram management
+
+Telegram can be managed two ways beyond editing `config.toml`:
+
+- **Web console.** `POST /api/v1/channels/telegram` connects, updates the editable `allowed_users` allowlist (the `bot_token` is optional on update, so you can change the allowlist without re-entering it), and disconnects; each action triggers a managed-daemon reload so the change applies without a manual restart. The bot token is **encrypted at rest** in `config.toml` (like `api_key`). (v0.6.98)
+- **CLI.** `rantaiclaw channel unbind-telegram <identity>` removes a username, numeric id, or the `*` wildcard from the Telegram allowlist — useful to lock an open (`["*"]`) allowlist down to explicit entries without hand-editing `config.toml`. Its counterpart `channel bind-telegram <identity>` adds one. (v0.6.85)
 
 ## Channel restart behavior
 

@@ -10,7 +10,7 @@ Autonomy in RantAIClaw is **two layers** that the docs sometimes conflate. Knowi
 | Layer | What it is | Where it lives |
 |---|---|---|
 | **Runtime enum** | Three states the approval gate actually branches on at execution time | `[autonomy].level` in config + `AutonomyLevel` enum in code |
-| **L1–L4 presets** | Four named bundles of autonomy + command allowlist + forbidden paths that the onboarding wizard writes to disk | `<profile>/policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` |
+| **Manual / Smart / Strict / Off presets** | Four named bundles of autonomy + command allowlist + forbidden paths that `rantaiclaw autonomy <preset>` (and the onboarding wizard) writes to disk | `<profile>/policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml` |
 
 The presets *write* values into the runtime enum (and other files) when you pick one. After that, the runtime only sees the enum + lists.
 
@@ -20,14 +20,16 @@ The presets *write* values into the runtime enum (and other files) when you pick
 
 | Value | What it does |
 |---|---|
-| `read_only` | Only read-shaped tools auto-approve. Writes and shell prompt for approval. |
+| `readonly` | Only read-shaped tools auto-approve. Writes and shell prompt for approval. |
 | `supervised` | Default. Tools listed in `[autonomy].auto_approve` auto-approve; everything else prompts. |
-| `full` | Skips auto-approve list; runs tools without prompting — but **still respects forbidden paths and `block_high_risk_commands`** (default `true`). |
+| `full` | Skips auto-approve list; runs tools without prompting — but **still respects forbidden paths**, plus `block_high_risk_commands` if you have turned it on (it defaults to `false`). |
+
+> The enum serializes lowercase (`#[serde(rename_all = "lowercase")]` in `src/security/policy.rs`), so the config value is `readonly` — **not** `read_only`. Writing `read_only` errors with "unknown variant".
 
 Two important properties of the runtime enum:
 
-- **Forbidden paths and `forbidden_commands` are non-negotiable across all three states.** Even `full` cannot bypass them — that's enforced in code (`policy.rs`), not policy.
-- **`block_high_risk_commands` defaults to `true`.** So `full` still blocks commands like `rm`, `sudo`, `curl`, `wget`, `ssh`, `chmod`, `mkfs`, `iptables`, `mount` unless that flag is explicitly set to `false`.
+- **Forbidden paths are non-negotiable across all three states.** Even `full` cannot bypass them — that's enforced in code (`policy.rs`), not policy.
+- **`block_high_risk_commands` defaults to `false`** (since v0.6.89 — usable-by-default for local capability). High-risk commands like `rm`, `sudo`, `curl`, `wget`, `ssh`, `chmod`, `mkfs`, `iptables`, `mount` are therefore *not* pre-blocked; they still pass the command allowlist and the approval gate. Set the flag to `true` to add a hard block that even `full` autonomy cannot bypass.
 
 ## Per-tool gating
 
@@ -39,15 +41,15 @@ level = "supervised"
 auto_approve = ["file_read", "memory_recall"]
 always_ask = []
 workspace_only = true
-max_actions_per_hour = 20
+max_actions_per_hour = 200
 max_cost_per_day_cents = 500
 ```
 
 Defaults:
 
 - `auto_approve = ["file_read", "memory_recall"]` — exactly two tools auto-approve by default.
-- `max_actions_per_hour = 20`
-- `max_cost_per_day_cents = 500`
+- `max_actions_per_hour = 200` (raised from `20` in v0.6.83 — the old budget was exhausted mid-turn)
+- `max_cost_per_day_cents = 500` (tracked for reporting; not a hard stop in the agent loop)
 - `forbidden_paths` includes `/home`, `/tmp`, `/var`, `~/.config`, `~/.aws`, etc. — only `workspace_dir` is reachable when `workspace_only = true`.
 
 There is **no** `[autonomy.overrides]` block with glob keys. Per-command shape rules live in a separate file documented below.
@@ -67,7 +69,7 @@ patterns = [
 ]
 ```
 
-Patterns are quote-aware globs over the command string. A request to run `cargo test --lib` matches `"cargo test *"` and auto-approves; a request to run `cargo publish` does not match and prompts (or denies under `read_only`).
+Patterns are quote-aware globs over the command string. A request to run `cargo test --lib` matches `"cargo test *"` and auto-approves; a request to run `cargo publish` does not match and prompts (or denies under `readonly`).
 
 The runtime parses commands with defense-in-depth: subshells (`` ` ``, `$(`, `${`, `<(`, `>(`), output redirects (`>`, `>>`), `tee`, single-`&`, `find -exec/-ok`, `git config/alias/-c`, and env-var prefixes (`FOO=bar cmd`) are all blocked or stripped before allowlist matching.
 
@@ -81,31 +83,50 @@ Independently of allowlists, every shell invocation is classified:
 | **Medium** | `git commit/push/reset/...`, `npm install`, `cargo add`, `touch`, `mv`, `cp` |
 | **Low** | Everything else |
 
-When `block_high_risk_commands = true` (default), high-risk commands are denied even under `full` autonomy.
+`block_high_risk_commands` defaults to `false`, so high-risk commands are classified but not pre-blocked — they still go through the command allowlist and the approval gate. Set `block_high_risk_commands = true` to deny them outright, even under `full` autonomy.
 
-## The onboarding presets — L1, L2, L3, L4
+## The presets — Manual, Smart, Strict, Off
 
-When you run `rantaiclaw setup` or `rantaiclaw onboard`, the wizard offers four named presets. Picking one writes a bundle of files to `<profile>/policy/`:
+Presets are named bundles of autonomy level + command allowlist + forbidden paths. Apply one from the CLI at any time:
+
+```bash
+rantaiclaw autonomy              # print the active preset + list all four
+rantaiclaw autonomy smart        # switch to the recommended default
+rantaiclaw autonomy off          # disable gating (CI / fully-trusted only)
+```
+
+`rantaiclaw setup` / `rantaiclaw onboard` offer the same four during first-run. Picking one writes a bundle of files (`policy/autonomy.toml` + `command_allowlist.toml` + `forbidden_paths.toml`) to `<profile>/policy/`:
 
 | Preset | What it writes |
 |---|---|
-| **L1 — Manual** | `level = "supervised"`, narrow `auto_approve`, strict allowlist, conservative forbidden_paths, `timeout_secs = 60` |
-| **L2 — Smart** | `level = "supervised"`, broader `auto_approve` for read tools and a curated set of shell command patterns (`ls`, `cat *`, `git status`, `web_search *`, `file_read *`, etc.), `timeout_secs = 60` |
-| **L3 — Strict** | `mode = "strict"`, deny-by-default, allows L2 read set + `memory_write *`, `skill_install *`, `cron_*`, `session_*`, `timeout_secs = 0` |
-| **L4 — Off** | `mode = "off"`, minimal forbidden list (still non-empty per spec), runtime `level = "full"` |
+| **Manual** (`manual`) | `mode = "manual"`, empty allowlist (every command prompts), `level = "supervised"`, wide `forbidden_paths`, `timeout_secs = 60` |
+| **Smart** (`smart`) | `mode = "manual"`, `level = "supervised"`, read-only + trivially-safe command patterns pre-allowed (`ls`, `cat *`, `git status`, `grep *`, `web_search *`, `file_read *`, `memory_*`, etc.), `timeout_secs = 60` |
+| **Strict** (`strict`) | `mode = "strict"`, deny-by-default (no prompt fallback), Smart read set + safe-write seeds (`memory_write *`, `skill_install *`, `cron_*`, `session_*`), `level = "supervised"`, `timeout_secs = 0` |
+| **Off** (`off`) | `mode = "off"`, gating disabled, minimal forbidden floor (the rantaiclaw secrets dir stays sealed), runtime `level = "full"` |
 
-Important: **the L1–L4 names are presets, not runtime states.** The onboarding wizard uses them to write a configuration; once the runtime is loaded, it only sees the three-value enum + the list-shaped policy files.
+The `L1`–`L4` labels from earlier releases are **legacy aliases only** — `rantaiclaw autonomy l1` still resolves to `manual`, `l2`→`smart`, `l3`→`strict`, `l4`→`off` — but the preset ids are now the words. `full` is also accepted as an alias for `off`.
 
-A subtle consequence: if you hand-edit `[autonomy].level` after onboarding, you've changed the runtime behavior but the preset name on disk no longer reflects what's running. The presets are a starting point, not a state.
+Important: **preset names are not runtime states.** They write configuration; once the runtime is loaded, it only sees the three-value enum + the list-shaped policy files. If you hand-edit `[autonomy].level` after picking a preset, the runtime behavior changes but the preset name on disk no longer reflects what's running.
+
+## Hot-reload — no restart for most changes
+
+Since v0.6.87, switching the preset (`rantaiclaw autonomy off`/`smart`/…) or editing permissions takes effect on **running** channels at the next message — no daemon restart. The runtime shares the autonomy level via an interior `Arc<RwLock>` and re-applies it on each `config.toml` change, alongside the command allowlist, approval owners (`approval_owners`), and the guest capability gate (`guest_allowed_tools` / `guest_allowed_commands`).
+
+Two things still apply only at boot, by design — they *narrow* the security boundary, so they are read once at startup:
+
+- `forbidden_paths`
+- the medium/high-risk approval flags (e.g. `require_approval_for_medium_risk`)
+
+Removing a command from an allowlist likewise takes full effect on restart; the live sync only widens.
 
 ## What approval prompts look like in practice
 
 Approval flow depends on the originating channel:
 
 - **CLI channel** — interactive `stdin.read_line` prompt. The prompt blocks until the user types `y`/`yes`/`approve` or `n`/`no`/`deny`. **There is no timeout on this prompt today** — `timeout_secs` is written to the policy file but no consumer reads it. If the user never responds, the tool call hangs.
-- **Non-CLI channels** — the dispatcher hard-codes a static deny (`ApprovalResponse::No`). There is no remote approval flow. Tools that the LLM tries to call from Discord, Telegram, etc., are denied unless `auto_approve` covers them.
+- **Non-CLI channels (Discord, Telegram, Slack, …)** — a pending Supervised-mode request is **relayed into the chat** and resolved from there (v0.6.84). An approval owner (`[channels_config] approval_owners`) can reply `/approve`, `approve`, `yes`, `y`, or `ok`; a bare `/deny` or `no` is honored from anyone. With several requests pending, the bot lists them and asks you to pick one. If no owner responds before the deadline the request auto-denies (default 5 minutes). The gateway also exposes `POST /api/v1/approvals/{id}` for programmatic resolution.
 
-Plan accordingly: if you want a tool to be callable from Slack, it must be in `auto_approve` (or covered by the `command_allowlist` for shell).
+Tools in `auto_approve` (or, for `shell`, commands matching the `command_allowlist`) skip the prompt entirely on every channel.
 
 ## The audit log
 
@@ -119,7 +140,7 @@ Every approval decision goes to `<profile>/audit.log` (JSONL, append-only). Sche
   "actor": { "channel": "cli", "user_id": "...", "username": "..." },
   "action": { "command": "cargo test --lib", "risk_level": "low", "approved": true, "allowed": true },
   "result": { "success": true, "exit_code": 0, "duration_ms": 4421, "error": null },
-  "security": { "policy_violation": false, "rate_limit_remaining": 19, "sandbox_backend": "landlock" }
+  "security": { "policy_violation": false, "rate_limit_remaining": 199, "sandbox_backend": "landlock" }
 }
 ```
 
@@ -134,18 +155,17 @@ The log rotates when it reaches `max_size_mb` (default 100), creating `audit.log
 Some boundaries are unconditional and not affected by which level / preset is active:
 
 - forbidden paths
-- `block_high_risk_commands` (when `true`)
 - TLS verification on outbound calls
-- gateway's `allow_public_bind` requirement
+- gateway's `allow_public_bind` requirement (localhost bind, pairing, rate limits)
 - channel allowlists (per-channel `allowed_*` keys — see [Channels](/docs/concepts/channels-and-providers))
 
-Relaxing any of these requires editing the specific config field. The autonomy knob is not a backdoor.
+`block_high_risk_commands` is an opt-in hard stop (default `false`): once enabled, no autonomy level bypasses it — but it is not on by default, because local capability is usable-by-default. Relaxing an exposure boundary requires editing its specific config field. The autonomy knob is not a backdoor.
 
 ## Reading the code
 
 - `src/security/policy.rs` — `AutonomyLevel` enum, command parser, risk classifier, forbidden_path enforcement
 - `src/approval/mod.rs` — CLI prompt, session-scoped "Always" allowlist
-- `src/approval/policy_writer.rs` — emits the L1–L4 preset files
-- `src/approval/presets/policy_l*.toml` — the actual preset bundles
+- `src/approval/policy_writer.rs` — `PolicyPreset` (Manual/Smart/Strict/Off) + emits the preset files; accepts `l1`–`l4` as legacy aliases
+- `src/approval/presets/policy_{manual,smart,strict,off}.toml` — the actual preset bundles
 - `src/security/audit.rs` — append-only audit log writer + rotation
 - `src/config/schema.rs` — `[autonomy]` config fields and defaults

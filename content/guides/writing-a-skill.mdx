@@ -1,24 +1,45 @@
 ---
 title: Writing a Skill
-description: Author a `SKILL.md` that bundles tools and instructions for a domain-specific task.
+description: Author a SKILL.toml or SKILL.md that packages tools and instructions for a domain-specific task.
 ---
 
 # Writing a Skill
 
-> **v1 status:** stub. Full schema reference and a multi-skill walkthrough TBD. For now, the canonical skill format is described in [Concepts → Tools & Skills](/docs/concepts/tools-and-skills) and reproduced below.
+> **v1 status:** stub. A multi-skill walkthrough is TBD. The canonical skill format is described in [Concepts → Tools & Skills](/docs/concepts/tools-and-skills) and reproduced below.
 
-## Minimal skill
+A skill is a directory whose name is the skill slug, containing a manifest — either a structured `SKILL.toml` or a prose `SKILL.md`. The loader tries `SKILL.toml` first and falls back to `SKILL.md` (see `src/skills/mod.rs`).
+
+- **`SKILL.toml` — the canonical, structured manifest.** Prefer it when the skill defines its own tools (`kind` + `command`), because `[[tools]]` entries are machine-parsed and registered.
+- **`SKILL.md` — the simpler prose fallback.** Its YAML frontmatter (`name`, `description`, `version`, `tags`, `author`) is parsed and the entire markdown body is injected into the agent prompt as instructions. A `## Tools` section in `SKILL.md` is prose the model reads, **not** a machine-parsed tool registry — for structured tool wiring use `SKILL.toml`.
+
+## Minimal skill (SKILL.toml)
+
+```toml
+[skill]
+name = "deploy-checker"
+description = "Validates deployment readiness before release."
+version = "0.1.0"
+author = "rantaiclaw_user"
+tags = ["release", "automation"]
+
+[[tools]]
+name = "run_checks"
+description = "Run the pre-deploy validation script."
+kind = "shell"
+command = "./scripts/pre-deploy.sh"
+```
+
+## Minimal skill (SKILL.md)
 
 ```markdown
-# SKILL.md — deploy-checker
+---
+name: deploy-checker
+description: Validates deployment readiness before release.
+version: 0.1.0
+tags: [release, automation]
+---
 
-## Description
-Validates deployment readiness before release.
-
-## Tools
-- name: run_checks
-  kind: shell
-  command: ./scripts/pre-deploy.sh
+# deploy-checker
 
 ## Instructions
 - Always run pre-deploy checks before approving a release
@@ -28,16 +49,38 @@ Validates deployment readiness before release.
 
 ## Where it goes
 
-Drop the skill folder into `~/.local/share/rantaiclaw/skills/<name>/` or install it globally to `/usr/local/share/rantaiclaw/skills/<name>/`. Workspace skills override system skills when names collide.
+Skills load from the active profile's skills directory:
 
-## Publishing to ClawHub
-
-Once your skill is working locally:
-
-```bash
-rantaiclaw skill publish ./path/to/my-skill/
+```
+~/.rantaiclaw/profiles/<profile>/skills/<name>/
 ```
 
-This pushes to [ClawHub](https://clawhub.ai) where other agents can install it via `rantaiclaw skill install <slug>`.
+The default profile is `default`, so a fresh install looks in `~/.rantaiclaw/profiles/default/skills/` (path defined in `src/profile/paths.rs`). Each subdirectory is one skill and holds its `SKILL.toml` or `SKILL.md`. The profile workspace's `skills/` directory is also scanned. When two skills share a `name`, the profile skills directory wins — the dedupe order is profile → workspace-parent → workspace, earliest source wins (see `load_workspace_skills` in `src/skills/mod.rs`).
 
-Detailed publishing flow, versioning, and the full SKILL.md schema will be documented here in a later iteration.
+## Managing skills from the CLI
+
+The `rantaiclaw skills` command (note the plural) manages installed skills — the subcommands are defined in `src/main.rs` (`SkillCommands`):
+
+| Command | What it does |
+|---|---|
+| `rantaiclaw skills list` | List installed skills |
+| `rantaiclaw skills show <name>` | Show metadata for a single installed skill |
+| `rantaiclaw skills install <source>` | Install from a GitHub URL or a local path |
+| `rantaiclaw skills remove <name>` | Remove an installed skill |
+| `rantaiclaw skills inspect <slug>` | Show ClawHub metadata + security scan *before* installing |
+| `rantaiclaw skills update [<slug>] [--all]` | Re-pull installed ClawHub skill(s) at their latest version |
+| `rantaiclaw skills install-deps [<slug>] [--all]` | Install missing binary dependencies a skill declares |
+
+`install <source>` accepts a GitHub URL or a local path. Live ClawHub search and browse (by slug) is available from the TUI. There is no `publish` subcommand.
+
+## Agent-authored skills
+
+You do not have to hand-write a manifest. Ask the agent in chat — "make me a skill that does X" — and it uses the built-in `author_skill` tool to scaffold one for you (added in v0.6.77; see `src/tools/author_skill.rs`).
+
+- The agent writes a loader-valid `SKILL.md` into the **active profile's** `skills/` directory, where it loads on the **next turn** (restart channel runtimes to pick it up immediately).
+- Only `name` and `description` are required; if you omit `instructions`, the tool fills in sensible defaults, so even a minimal request yields a complete, well-structured skill.
+- The directory slug is derived from the name and sanitized to a filesystem-safe form (`[a-z0-9-]` only — path traversal is impossible by construction).
+- An existing skill of the same name is **never overwritten** unless `overwrite: true` is passed.
+- The tool is **approval-gated by name** (like `skills_install`): in supervised mode you are prompted before the file is written.
+
+> Skills that need to answer from your own documents can point the agent at the [Knowledge Base](/docs/knowledge-base) — RantaiClaw's document ingestion and retrieval subsystem — instead of hard-coding facts.

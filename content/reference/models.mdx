@@ -1,0 +1,210 @@
+---
+title: Model Catalog
+description: Release-tracked catalog of the recommended/default model id per provider, sourced from the setup wizard's curated lists in src/onboard/wizard.rs.
+---
+
+# Model Catalog
+
+> **v0.7.0-alpha snapshot.** Model ids move fast. This page tracks the curated
+> ids shipped in the setup wizard as of the current release. The live source of
+> truth is `curated_models_for_provider` / `default_model_for_provider` in
+> `src/onboard/wizard.rs`; the `/model` picker in the TUI reads the same lists.
+
+Model ids are **free-form strings** — the runtime passes whatever you set in
+`default_model` straight to the provider. Nothing gates them, so any id the
+provider accepts works even if it is not listed here. The curated ids below are
+just the vetted defaults the onboarding wizard and `/model` picker offer.
+
+## How the per-provider default works
+
+When you run the setup wizard and accept the suggested model for a provider, the
+wizard writes that provider's default into `default_model` (see
+`default_model_for_provider` in `src/onboard/wizard.rs`). This is a
+**wizard-time** default — the id it pre-fills for the chosen provider — not a
+live runtime fallback.
+
+If `default_model` is left unset entirely in `config.toml`, the agent loop uses
+a hardcoded fallback of `anthropic/claude-sonnet-4` rather than the per-provider
+default (see `src/agent/loop_.rs`). In practice `default_model` is always
+populated after onboarding, so the per-provider default is what you get.
+
+## Recommended default per provider
+
+Canonical provider name (aliases resolve to these) and the id
+`default_model_for_provider` returns:
+
+| Provider | Default model id |
+|---|---|
+| `openrouter` | `anthropic/claude-sonnet-4.6` |
+| `anthropic` | `claude-sonnet-4-6` |
+| `openai` | `gpt-5.5` |
+| `openai-codex` | `gpt-5.3-codex` |
+| `gemini` (`google`) | `gemini-3-pro` |
+| `deepseek` | `deepseek-v4-pro` |
+| `xai` (`grok`) | `grok-4-1-fast-reasoning` |
+| `qwen` | `qwen3.7-plus` |
+| `qwen-code` | `qwen3.6-coder-plus` |
+| `moonshot` (`kimi`) | `kimi-k2.6` |
+| `kimi-code` | `kimi-for-coding` |
+| `glm` / `zai` | `glm-5.2` |
+| `minimax` | `MiniMax-M3` |
+| `mistral` | `mistral-large-latest` |
+| `cohere` | `command-a-03-2025` |
+| `perplexity` | `sonar-pro` |
+| `groq` | `llama-spark` |
+| `venice` | `zai-org-glm-5.1` |
+| `fireworks` | `accounts/fireworks/models/llama-spark` |
+| `together-ai` | `meta-llama/Llama-Spark` |
+| `nvidia` | `meta/llama-spark` |
+| `ollama` | `llama-spark` |
+| `llamacpp` | `ggml-org/llama-spark-GGUF` |
+| `bedrock` | `anthropic.claude-sonnet-4-6-v1:0` |
+
+## Curated menus (flagships)
+
+The wizard and `/model` picker present these per-provider menus. The entry
+marked "(default)" is what `default_model_for_provider` returns — note that
+Moonshot and Qwen list the newest id first while still defaulting to the stable
+flagship.
+
+### Anthropic
+
+| Model id | Notes |
+|---|---|
+| `claude-sonnet-4-6` | Balanced, recommended (default) |
+| `claude-opus-4-8` | Best quality |
+| `claude-opus-4-7` | Previous flagship |
+| `claude-haiku-4-5-20251001` | Fastest, cheapest |
+| `claude-sonnet-4-5-20250929` | Legacy |
+
+### OpenAI
+
+| Model id | Notes |
+|---|---|
+| `gpt-5.5` | Latest flagship, recommended (default) |
+| `gpt-5.4` | Previous flagship, stable |
+| `gpt-5.3-codex` | Agentic coding |
+| `gpt-5.2` | Older, stable |
+| `gpt-5-mini` | Faster, cheaper |
+| `gpt-5-nano` | Lowest latency/cost |
+| `o4-mini` | Reasoning fallback |
+
+> **Removed phantom ids (0.6.80).** The `openai` list no longer includes
+> `gpt-5.5-codex`, and the bare `gpt-5.3` id is gone — neither exists on the
+> OpenAI API. The `openai-codex` provider now defaults to `gpt-5.3-codex`
+> (the newest codex id that actually exists), and regression tests assert the
+> phantom ids never reappear.
+
+### OpenAI Codex (`openai-codex`)
+
+| Model id | Notes |
+|---|---|
+| `gpt-5.3-codex` | Latest, recommended (default) |
+| `gpt-5.2-codex` | Older flagship |
+| `gpt-5.1-codex-mini` | Cheap, capable |
+| `gpt-5-codex` | Legacy, stable |
+| `o4-mini` | Reasoning fallback |
+
+### DeepSeek
+
+| Model id | Notes |
+|---|---|
+| `deepseek-v4-pro` | Latest flagship, recommended (default) |
+| `deepseek-v4-flash` | Fast, cost-efficient |
+| `deepseek-chat` | Mapped to V3.2 non-thinking |
+| `deepseek-reasoner` | Mapped to V3.2 thinking |
+
+### Qwen
+
+| Model id | Notes |
+|---|---|
+| `qwen3.7-max` | Latest flagship, highest quality |
+| `qwen3.7-plus` | Balanced (default) |
+| `qwen3.6-max` | Previous flagship |
+| `qwen3.6-plus` | Balanced |
+| `qwen3.6-turbo` | Fast, cost-efficient |
+
+### GLM / Z.ai (`glm`, `zai`)
+
+| Model id | Notes |
+|---|---|
+| `glm-5.2` | Latest flagship, recommended (default) |
+| `glm-5.1` | Previous flagship |
+| `glm-5` | Stable |
+| `glm-4.7` | Strong general-purpose, stable |
+| `glm-4.5-air` | Lower latency |
+
+### Moonshot / Kimi (`moonshot`)
+
+| Model id | Notes |
+|---|---|
+| `kimi-k2.7-code` | Latest, agentic coding |
+| `kimi-k2.6` | Flagship, recommended (default) |
+| `kimi-k2.5` | Previous flagship |
+| `kimi-k2-thinking` | Deep reasoning + tool use |
+| `kimi-k2-0905-preview` | Legacy |
+
+### MiniMax
+
+| Model id | Notes |
+|---|---|
+| `MiniMax-M3` | Latest flagship, recommended (default) |
+| `MiniMax-M2.7` | Previous flagship |
+| `MiniMax-M2.7-highspeed` | Fast |
+| `MiniMax-M2.5` | Stable |
+| `MiniMax-M2.1` | Strong coding/reasoning, stable |
+
+### xAI / Grok (`xai`)
+
+| Model id | Notes |
+|---|---|
+| `grok-4-1-fast-reasoning` | Recommended (default) |
+| `grok-4-1-fast-non-reasoning` | Low latency |
+| `grok-code-fast-1` | Coding specialist |
+| `grok-4` | Max quality |
+
+### Mistral
+
+| Model id | Notes |
+|---|---|
+| `mistral-large-latest` | Latest flagship (default) |
+| `mistral-medium-latest` | Balanced |
+| `codestral-latest` | Code-focused |
+| `devstral-latest` | Software-engineering specialist |
+
+### Cohere
+
+| Model id | Notes |
+|---|---|
+| `command-a-03-2025` | Flagship enterprise model (default) |
+| `command-a-reasoning-08-2025` | Agentic reasoning |
+| `command-r-08-2024` | Stable fast baseline |
+
+### Gemini
+
+| Model id | Notes |
+|---|---|
+| `gemini-3-pro` | Latest frontier reasoning, recommended (default) |
+| `gemini-3-flash` | Best price/performance |
+| `gemini-2.5-pro` | Previous flagship, stable |
+| `gemini-2.5-flash` | Legacy fast tier |
+| `gemini-2.5-flash-lite` | Lowest cost |
+
+## OpenRouter and aggregators
+
+`openrouter` (and `astrai`) use slash-prefixed, cross-provider ids because they
+route to many upstreams. The curated OpenRouter menu leads with
+`anthropic/claude-sonnet-4.6` (the default), and also offers
+`anthropic/claude-opus-4.7`, `openai/gpt-5.5`, `google/gemini-3-pro`,
+`x-ai/grok-4.1-fast`, `deepseek/deepseek-v3.2`, `moonshotai/kimi-k2.6`, and
+`z-ai/glm-5.1`, among others. Set any provider-prefixed id the aggregator
+supports.
+
+## Overriding at runtime
+
+For most providers the wizard can also fetch the live model list from the
+provider's `/models` endpoint (`supports_live_model_fetch` in
+`src/onboard/wizard.rs`), so the picker shows current ids beyond this curated
+set. You can always set `default_model` by hand or switch mid-session with
+`/model`. See [Providers](/docs/reference/providers) for provider slugs,
+routing, and fallbacks.

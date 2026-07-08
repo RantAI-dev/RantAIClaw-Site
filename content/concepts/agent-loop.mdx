@@ -48,9 +48,9 @@ This page describes what actually happens at runtime. A few specifics will surpr
         ▼                                      │
  ┌─────────────┐                               │
  │  Approval   │  CLI: stdin prompt (blocks)   │
- │   Gate      │  Other channels: hard-coded   │
- │             │     deny if not in            │
- │             │     auto_approve list         │
+ │   Gate      │  Other channels: relay to     │
+ │             │     an owner in chat          │
+ │             │     (or auto_approve)         │
  └──────┬──────┘                               │
         │ approved                             │
         ▼                                      │
@@ -114,11 +114,11 @@ The agent loop never sees transient failures.
 When the provider returns a tool call request, it does not go straight to execution. The dispatcher routes through `src/approval/mod.rs`:
 
 - **CLI channel** — interactive `stdin.read_line` prompt. The user types `y`/`yes` or `n`/`no`. **There is no timeout** — `timeout_secs = 60` is written to the policy file but no consumer reads it. If the user never responds, the loop hangs.
-- **Non-CLI channels (Discord, Telegram, etc.)** — the dispatcher hard-codes `ApprovalResponse::No` for anything not in the `auto_approve` list. There is no remote approval flow today.
+- **Non-CLI channels (Discord, Telegram, etc.)** — a pending Supervised-mode approval is **relayed into the chat** and resolved from there (`src/channels/approval_relay.rs`, v0.6.84). An approval owner (`[channels_config] approval_owners`) can reply `/approve`, `approve`, `yes`, `y`, or `ok`; a bare `/deny` or `no` is honored from anyone. With multiple requests pending, the bot lists them and asks you to pick one; if no owner responds before the deadline the request auto-denies. The gateway also exposes `POST /api/v1/approvals/{id}` for programmatic resolution.
 
 Tools listed in `[autonomy].auto_approve` skip the prompt; tools matching the command allowlist (for `shell`) skip too. The default `auto_approve` is `["file_read", "memory_recall"]` — only those two skip the prompt out of the box.
 
-If you want a tool to be callable from a non-CLI channel, **it must be in `auto_approve`** (or for `shell` commands, the command must match a pattern in `command_allowlist.toml`). Otherwise the dispatcher denies it without a prompt.
+If you want a tool to run from a non-CLI channel **without** an owner approving each call, put it in `auto_approve` (or, for `shell` commands, match a pattern in `command_allowlist.toml`).
 
 See [Autonomy Levels](/docs/concepts/autonomy-levels) for the policy details.
 

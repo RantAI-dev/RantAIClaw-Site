@@ -14,21 +14,22 @@ Reference content is for **looking things up**. If you want to know what a flag 
 | [Providers](/docs/reference/providers) | Built-in providers and their settings |
 | [Channels](/docs/reference/channels) | Built-in channels and their settings |
 | [Tools](/docs/reference/tools) | Built-in tools and their parameter schemas |
-| [Skills](/docs/reference/skills) | `SKILL.md` schema |
+| [Skills](/docs/reference/skills) | `SKILL.toml` / `SKILL.md` schema |
 | [Troubleshooting](/docs/reference/troubleshooting) | Common failures and remediation |
+| [Knowledge Base](/docs/knowledge-base) | Document ingest, retrieval, and the `KB_*` reference |
 
 ## Where this content comes from
 
-Most reference pages will eventually be **generated** from rantaiclaw source — `--help` output, JSON Schema export, tool registry introspection — to prevent drift. Today the pages are placeholders that link out to the canonical markdown in the [rantaiclaw repo](https://github.com/RantAI-dev/RantAIClaw/tree/main/docs).
+The CLI, Config, Providers, Channels, Tools, Skills, and Troubleshooting pages are **maintained hand-written references**, kept in sync with the rantaiclaw crate rather than left as placeholders. Where a page cites a crate path (e.g. "defined in `src/config/schema.rs`"), that path is the source of truth. Some pages may later be **generated** from rantaiclaw source — `--help` output, JSON Schema export, tool registry introspection — as an extra guard against drift.
 
-**Generation plan:**
+**Maintenance status:**
 
-| Page | Source | Status |
+| Page | Future generation source | Status |
 |---|---|---|
-| CLI | `rantaiclaw --help` parsed by `scripts/gen-cli.ts` | TODO |
-| Config | `cargo run --bin rantaiclaw -- config schema --json` (uses `schemars`) | TODO |
-| Providers | Trait scan + per-provider config block | TODO |
-| Channels | Same | TODO |
-| Tools | Tool registry dump | TODO |
-| Skills | Hand-written from spec; the schema itself rarely changes | hand-written |
-| Troubleshooting | Hand-written; aggregates known issues | hand-written |
+| CLI | `rantaiclaw --help` parsed by `scripts/gen-cli.ts` | hand-written (maintained) |
+| Config | `cargo run --bin rantaiclaw -- config schema --json` (uses `schemars`) | hand-written (maintained) |
+| Providers | Trait scan + per-provider config block | hand-written (maintained) |
+| Channels | Same | hand-written (maintained) |
+| Tools | Tool registry dump | hand-written (maintained) |
+| Skills | Hand-written from spec; the schema itself rarely changes | hand-written (maintained) |
+| Troubleshooting | Hand-written; aggregates known issues | hand-written (maintained) |
