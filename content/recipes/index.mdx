@@ -5,12 +5,19 @@ description: Worked examples — multi-channel bots, MCP integrations, scheduled
 
 # Recipes
 
-> **v1 status:** empty. Recipes are end-to-end worked examples that combine concepts. Planned topics:
+> **v1 status:** the first recipe has landed. Recipes are end-to-end worked examples that combine concepts.
+
+## Available now
+
+- [Knowledge Base: ingest documents and answer from them](/docs/recipes/knowledge-base) — configure KB keys, ingest files, then query from chat or `rantaiclaw kb search`.
+
+## Planned topics
 
 - A multi-channel customer support bot (Telegram + Slack + Email, shared memory)
 - A code review agent with the GitHub MCP server and the `code-reviewer` skill
 - A cron-driven release announcer that posts to Discord on tag pushes
 - An on-call triage bot wired to alerts via webhook + PagerDuty MCP
+- Managing channels from the web console (connect Telegram, edit allowlists, hot reload)
 - A hardware project: STM32 sensor read + LLM-explained alerts
 
-Each recipe will start from "I want to do X," walk through the config + skill setup, and end at "now your agent is doing X." If there is a recipe you want, [open an issue](https://github.com/RantAI-dev/RantAIClaw-Docs/issues).
+Each recipe starts from "I want to do X," walks through the config + skill setup, and ends at "now your agent is doing X." If there is a recipe you want, [open an issue](https://github.com/RantAI-dev/RantAIClaw-Docs/issues).

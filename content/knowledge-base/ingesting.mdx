@@ -1,0 +1,101 @@
+---
+title: Ingesting Documents
+description: Supported file types, the smart-router PDF pipeline (text-layer first, OCR fallback), and how to ingest via the CLI or an HTTP multipart upload.
+---
+
+# Ingesting Documents
+
+Ingesting a document extracts its text, splits it into structure-aware chunks, embeds each chunk, and stores the document plus its chunks in `kb.db`. From that point the document is searchable. This page covers what you can ingest and how.
+
+## Supported file types
+
+Dispatch happens by extension in `src/kb/file/` (`detect_file_type` + the per-type handlers):
+
+| Type | Extensions | How it's extracted |
+|---|---|---|
+| PDF | `.pdf` | Smart-router pipeline — text-layer first, OCR fallback (see below). Always available. |
+| Markdown / text / source code | `.md`, `.txt`, `.rs`, `.py`, `.ts`, … | Read directly as text. |
+| Images | `.png`, `.jpg`, `.jpeg`, `.webp` | OCR via an OpenRouter vision LLM. |
+| Office | `.docx`, `.xlsx` | Requires the `kb-office` Cargo feature. |
+
+> Office ingestion is **not** in the default build. Compile with `--features kb-office` (which pulls in `calamine` + `docx-rs`) to enable `.docx` / `.xlsx`. Other office formats (`.pptx`, `.rtf`, `.epub`, `.doc`, `.ppt`, `.odt`) are not implemented — an unsupported extension is rejected up front with an `unsupported_file_type` error.
+
+## The smart-router PDF pipeline
+
+PDFs are the hard case: some are digital-native (a real text layer), some are scans or design-heavy brochures (the content lives in images). The default extractor (`KB_EXTRACT_PRIMARY=smart`) routes between the two automatically. The logic is in `src/kb/extract/smart_router.rs` and `src/kb/extract/text_layer_signals.rs`:
+
+1. **Text layer first.** Run the text-layer extractor (sentinel `unpdf`, backed by the `pdf-extract` crate).
+2. **Sufficiency check.** Classify the extracted text with `is_unpdf_sufficient_with_size`. It falls back to OCR when the text looks too thin or too table-mangled for retrieval — the defaults in `RouterOpts` are `min_chars_per_page = 300`, plus columnar-line and dense-currency guards.
+3. **Density guard for large files.** For PDFs above roughly 1 MB, if the extracted-text-to-file-size ratio drops below `min_text_filesize_ratio` (default `0.005`, i.e. 0.5%), the file is treated as image/design-heavy and routed to OCR. Below that size floor the ratio is too noisy to trust, so the guard is skipped.
+4. **OCR fallback.** When the text layer is insufficient, fall through to the configured fallback — by default a vision LLM (`KB_EXTRACT_SMART_FALLBACK=openai/gpt-4.1-nano` through OpenRouter), or a MinerU sidecar when `KB_EXTRACT_PRIMARY=mineru` / `KB_EXTRACT_MINERU_BASE_URL` is set.
+
+> The density guard shipped in **v0.6.90** alongside the OCR fix. A port regression had made `UnpdfExtractor` return `pages: None`, which collapsed the per-page sufficiency heuristic — image-layout PDFs were accepted with thin text and never routed to OCR, so they ingested as documents the agent couldn't read. Real page counts were restored and the text/file-size density guard was added. That release also let vision OCR fall back to the embedding API key when its own key is unset.
+
+## Ingesting from the CLI
+
+```bash
+rantaiclaw kb ingest /path/to/policy.pdf --category INSURANCE --group billing
+```
+
+Flags (defined in `src/kb/axi/cli.rs`):
+
+| Flag | Effect |
+|---|---|
+| `--title <t>` | Override the document title (default: the file stem). |
+| `--category <c>` | Add a category. Repeat for multiple. |
+| `--group <g>` | Add the document to a KB group. Repeat for multiple. |
+| `--json` | Emit JSON instead of TOON. |
+
+On the CLI, extraction, chunking, embedding, and storage all run inline; the command exits when they finish. (When Document Intelligence is enabled it also runs inline after ingest — see [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence).)
+
+## Ingesting over HTTP
+
+```
+POST /api/v1/kb/documents        # multipart/form-data
+```
+
+Multipart fields (handled in `src/kb/axi/api.rs`; all optional except `file`):
+
+| Field | Meaning |
+|---|---|
+| `file` | The file bytes. The filename supplies the default title and the extension hint. |
+| `title` | Overrides the file-stem title. |
+| `categories` | Comma-separated categories, e.g. `FAQ,product`. |
+| `groups` | Comma-separated KB group IDs. |
+
+> **Upload size cap: 32 MiB per request.** `KB_UPLOAD_MAX_BYTES` is `32 * 1024 * 1024` in `src/kb/axi/api.rs`; larger uploads are rejected by the body-limit layer before any handler runs. The KB routes also get a longer per-request timeout (600 s) than the gateway default, because ingest embeds every chunk through the (possibly remote) embedding provider.
+
+### Ingest observability
+
+The ingest response is not just an ID — it carries extraction-quality signals so a UI can warn when a document extracted poorly (`IngestResponse` in `src/kb/axi/api.rs`):
+
+```json
+{
+  "document_id": "…",
+  "chunks_stored": 12,
+  "elapsed_ms": 1840,
+  "chars_extracted": 8123,
+  "pages": 4,
+  "low_text_density": false
+}
+```
+
+`low_text_density` is `true` when the extracted character count is thin for the page count (a conservative ~100 chars/page floor), which is the signal that a document may retrieve poorly and might need OCR. The same condition is logged server-side at `warn`.
+
+### Orphan-document rollback
+
+Also since **v0.6.90**: if chunk storage fails after the document row is written, the document row is rolled back rather than left behind. Ingest no longer leaves orphan 0-chunk documents. An upload that extracts but produces no chunks is reported as an operational error instead of a silent empty document.
+
+## Limitations
+
+Carried from `docs/kb.md`:
+
+- **Office formats** are limited to `.docx` / `.xlsx` behind `kb-office`; other office formats are not implemented.
+- **Image OCR via Ollama** (the TS predecessor's `use_ocr_pipeline`) is not ported — current builds use OpenRouter vision LLMs only.
+- **No LanceDB / HNSW backend.** The `sqlite-vec` backend does a linear scan over the vector table, which is fast enough for corpora up to ~100k chunks. There is intentionally no stub `kb-lancedb` feature.
+
+## See also
+
+- [Searching & Retrieval](/docs/knowledge-base/search-retrieval) — how ingested documents are found.
+- [Configuration & Keys](/docs/knowledge-base/configuration) — the `KB_EXTRACT_*` and embedding knobs.
+- [CLI & HTTP API Reference](/docs/knowledge-base/reference) — the full `ingest` surface.

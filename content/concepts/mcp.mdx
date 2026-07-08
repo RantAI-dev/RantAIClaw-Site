@@ -17,7 +17,7 @@ This page is honest about what's wired today vs. what's stubbed:
 | Register MCP-server tools with the agent so the LLM can call them | ❌ Not implemented |
 | Run runtime `initialize` handshake on supervisor restart | ❌ Not implemented |
 | `rantaiclaw mcp` top-level CLI | ❌ Does not exist |
-| `GET /mcp/servers` HTTP endpoint | ❌ Does not exist (real route is `GET /config/mcp-servers`, but that's also unmounted today) |
+| `GET /mcp/servers` HTTP endpoint | ❌ Not this path — MCP servers are managed live via `POST`/`DELETE /api/v1/config/mcp_servers/{name}` |
 | Prometheus metrics named `rantaiclaw_mcp_*` | ❌ None registered |
 
 If you're reading documentation that describes "your agent automatically calls GitHub MCP server tools" — that's a design intent, not the current behavior. Today the supervisor keeps MCP processes alive; consumption by the agent loop is a future PR.
@@ -101,7 +101,7 @@ These are honest gaps you should know about:
 - **Resource subscription, sampling, log forwarding.** None of these MCP advanced features are implemented — there is no JSON-RPC client at runtime at all.
 - **`rantaiclaw mcp` CLI.** No top-level `mcp` command. MCP work happens via `rantaiclaw setup mcp` and `rantaiclaw onboard`.
 - **Metrics.** No `rantaiclaw_mcp_*` Prometheus metrics. Generic counters (`rantaiclaw_tool_calls_total`, `rantaiclaw_errors_total`, etc.) cover MCP indirectly only when MCP-driven tools eventually become visible to the tool registry.
-- **`/mcp/servers` HTTP endpoint.** Doesn't exist. The closest planned endpoint is `GET /config/mcp-servers` in `src/gateway/config_api.rs`, but that file isn't mounted on the router (see [Gateway](/docs/concepts/gateway)).
+- **`/mcp/servers` HTTP endpoint.** That exact path doesn't exist, but MCP-server config **is** editable over HTTP: `POST`/`DELETE /api/v1/config/mcp_servers/{name}` in `src/gateway/config_api.rs` (mounted on the router — see [Gateway](/docs/concepts/gateway)) add or remove a server entry. It edits config; it does not open a JSON-RPC session or register tools.
 
 ## Trust and security
 

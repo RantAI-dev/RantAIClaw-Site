@@ -20,6 +20,8 @@ api_url = "https://openrouter.ai/api/v1"
 
 `api_url` is optional — providers ship with sensible defaults.
 
+> For the recommended/default model id per provider (the ids the setup wizard and `/model` picker offer), see the [Model Catalog](/docs/reference/models).
+
 ## Direct backends (full implementations)
 
 These have dedicated provider modules:
@@ -72,13 +74,13 @@ default_model = "anthropic/claude-sonnet-4.6"
 api_key = "${OPENROUTER_KEY}"
 
 [reliability]
-provider_retries = 2                    # default 2
+provider_retries = 3                    # default 3
 provider_backoff_ms = 500               # base; doubles up to 10s cap
 fallback_providers = ["anthropic", "openai"]
 api_keys = ["${KEY_1}", "${KEY_2}"]     # rotated on 429
 
 [reliability.model_fallbacks]
-"anthropic/claude-sonnet-4.6" = ["anthropic/claude-haiku-4.5", "openai/gpt-4o"]
+"anthropic/claude-sonnet-4.6" = ["anthropic/claude-haiku-4.5", "openai/gpt-5.4"]
 
 [[model_routes]]
 hint = "claude-"                # match prefix on the requested model name

@@ -31,7 +31,7 @@ The actual `src/` tree is broader than the seven traits would suggest. The full 
 | Subsystem | Owns |
 |---|---|
 | `agent/` | Orchestration loop, persona application, tool dispatch, memory loader |
-| `approval/` | Approval gate (CLI prompt, session-scoped allowlist), L1–L4 preset writer |
+| `approval/` | Approval gate (CLI prompt, session-scoped allowlist), Manual/Smart/Strict/Off preset writer, in-chat approval relay |
 | `auth/` | Auth flows for providers — OAuth, OpenAI Codex device-code, Anthropic subscription tokens |
 | `channels/` | Per-channel transport, allowlist enforcement |
 | `config/` | Schema, load/merge, runtime overrides (planned), JSON Schema export |
@@ -45,6 +45,7 @@ The actual `src/` tree is broader than the seven traits would suggest. The full 
 | `heartbeat/` | Periodic vitality and self-check signals |
 | `identity/` | Agent identity / project-context bootstrap |
 | `integrations/` | External service integrations |
+| `kb/` | Knowledge Base — document ingestion + OCR, hybrid + GraphRAG retrieval, cross-document Document Intelligence graph, and the `/api/v1/kb/*` HTTP API |
 | `lifecycle/` | Process lifecycle (signals, graceful shutdown) |
 | `mcp/` | MCP server supervision (process-level today) |
 | `memory/` | Memory traits and 5 backends + hygiene + snapshot/hydration + response cache |
@@ -70,6 +71,8 @@ The actual `src/` tree is broader than the seven traits would suggest. The full 
 | `tunnel/` | Tunnel manager (cloudflared, ngrok) for public exposure without binding |
 
 This is what makes `rantaiclaw` a single binary that can do a lot — the responsibilities are partitioned narrowly, so each subsystem stays small and auditable.
+
+The `kb/` subsystem is gated behind the `kb` Cargo feature (on by default) and reads its own `[knowledge]` config section — the encrypted embedding / OCR credentials added in schema **v10** (`src/config/schema.rs`, `KnowledgeConfig`). See [Knowledge Base](/docs/knowledge-base) for its ingestion, retrieval, and Document Intelligence surfaces.
 
 ## Boundary contract
 
@@ -115,7 +118,8 @@ Breaking either requires explicit justification.
 
 - [Profiles](/docs/concepts/profiles) — the per-profile workspace under `~/.rantaiclaw/profiles/<name>/`
 - [Agent Loop](/docs/concepts/agent-loop) — what happens between message arriving and reply going out
-- [Autonomy Levels](/docs/concepts/autonomy-levels) — the 3-level runtime enum and L1–L4 preset bundles
+- [Autonomy Levels](/docs/concepts/autonomy-levels) — the 3-level runtime enum and Manual/Smart/Strict/Off preset bundles
 - [Channels & Providers](/docs/concepts/channels-and-providers) — the two largest extension surfaces
 - [Tools & Skills](/docs/concepts/tools-and-skills) — how the agent acts on the world
-- [Security Model](/docs/concepts/security) — the deny-by-default boundaries
+- [Security Model](/docs/concepts/security) — usable-by-default local capability, deny-by-default exposure boundary
+- [Knowledge Base](/docs/knowledge-base) — the document store, retrieval, and Document Intelligence graph

@@ -7,6 +7,8 @@ description: Five memory backends, hybrid lexical+vector recall, and per-session
 
 An agent without memory forgets every conversation when it starts a new one. RantAIClaw's memory system gives agents three things: short-term conversation history, durable facts, and hybrid (lexical + vector) recall.
 
+> **Memory vs the Knowledge Base.** This page is about *memory* — the agent's short-term and long-term **conversation** state. The [Knowledge Base](/docs/knowledge-base) is a separate document store (PDFs, markdown, office files, images) with its own schema, lifecycle, and access paths. The two are deliberately not the same store; see the [Knowledge Base](/docs/knowledge-base) section for ingestion, hybrid + GraphRAG retrieval, and its HTTP API.
+
 There are **five backends**, each with a different sweet spot:
 
 | Backend | Best for | Tradeoff |
@@ -78,14 +80,21 @@ conversation_retention_days = 30
 min_relevance_score = 0.4
 vector_weight = 0.7
 keyword_weight = 0.3
-
-[memory.embedding]
-provider = "none"                       # ← NoopEmbedding by default!
-model = "text-embedding-3-small"
-dimensions = 1536
+embedding_provider = "none"             # ← NoopEmbedding by default!
+embedding_model = "text-embedding-3-small"
+embedding_dimensions = 1536
 ```
 
-**The default embedding provider is `none`** (NoopEmbedding) — meaning until you configure a real embedding provider, recall is effectively lexical-only. Set `[memory.embedding].provider` to `openai`, `voyage`, etc., and supply credentials to enable real semantic recall.
+There is **no `[memory.embedding]` nested table** — these are flat keys under `[memory]` (`MemoryConfig` in `src/config/schema.rs`: `embedding_provider`, `embedding_model`, `embedding_dimensions`).
+
+**The default embedding provider is `none`** (NoopEmbedding) — until you configure a real one, recall is effectively lexical-only. `create_embedding_provider` (`src/memory/embeddings.rs`) recognizes exactly:
+
+- `none` — NoopEmbedding (default; lexical-only recall)
+- `openai` — OpenAI embeddings (e.g. `text-embedding-3-small`)
+- `minimax` — native MiniMax `embo-01` (v0.6.86); set `embedding_model = "embo-01"`, `embedding_dimensions = 1536`. The embedding key **reuses the main MiniMax provider key** — no second credential to enter.
+- `custom:<url>` — any OpenAI-compatible embeddings endpoint at the given base URL
+
+Anything else falls back to `none`. Supply the matching provider credentials to enable real semantic recall.
 
 You can also declare alternative routes per memory model name:
 
@@ -163,15 +172,21 @@ Per-profile under `~/.rantaiclaw/profiles/<active>/`:
 | `markdown` | `<profile>/workspace/memory/<category>/...` |
 | `postgres` | configured via `db_url` |
 
+## Channel history persistence
+
+Per-sender conversation history for chat channels (Telegram, Discord, …) is persisted so threads survive a daemon restart (v0.6.88). It's held write-through in a `channel_history` table in the same `brain.db`, keyed by `channel_sender`, and reloaded at startup — so a restarted bot resumes each thread exactly where it left off instead of "forgetting" the conversation.
+
+This is **sqlite-only**: enabled automatically when the memory backend is `sqlite`; `markdown` / `none` backends keep the prior in-memory behavior. Persistence failures degrade gracefully (log + in-memory only) and never block message handling (`src/channels/history_store.rs`).
+
 ## Response cache (separate)
 
-Adjacent to memory but distinct: `[memory.response_cache]` is an LRU cache of LLM responses keyed by prompt hash.
+Adjacent to memory but distinct: an LRU cache of LLM responses keyed by prompt hash. Its keys are **flat under `[memory]`** (there is no `[memory.response_cache]` nested table), and the TTL is in **minutes**:
 
 ```toml
-[memory.response_cache]
-enabled = false      # default
-ttl_seconds = 3600
-max_entries = 5000
+[memory]
+response_cache_enabled = false          # default
+response_cache_ttl_minutes = 60         # minutes, not seconds
+response_cache_max_entries = 5000
 ```
 
 When enabled, repeated identical prompts skip the provider and return cached answers within the TTL window. Useful for deterministic workloads; a footgun for anything personalized.

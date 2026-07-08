@@ -1,0 +1,95 @@
+---
+title: "Recipe: Knowledge Base — ingest documents and answer from them"
+description: End-to-end walkthrough — configure the KB keys, ingest a folder of documents, then query them from chat or the CLI, with optional Document Intelligence and GraphRAG.
+---
+
+# Recipe: give your agent a Knowledge Base
+
+**I want to:** point my agent at a pile of documents (policies, manuals, PDFs, notes) and have it answer questions from them — from chat and from the CLI.
+
+This recipe wires up RantAIClaw's Knowledge Base (KB): an organization-level document store backed by SQLite + `sqlite-vec` vectors and FTS5/BM25 keyword search, implemented in `src/kb/`. It is strictly separate from the agent's conversation memory (`src/memory/`) — the KB holds the documents you *ingest*, not the chat history.
+
+> The `kb` feature ships in the default build (`Cargo.toml` `default = ["tui", "whatsapp-web", "remote-install", "kb"]`), so a stock binary already has the KB compiled in. Office formats (`.docx`, `.xlsx`) additionally require the `kb-office` feature (`cargo build --features kb,kb-office`).
+
+## 1. Configure the KB keys
+
+The KB needs an **embedding** API key to turn documents and queries into vectors. Run the setup section:
+
+```bash
+rantaiclaw setup knowledge
+```
+
+This writes an encrypted `[knowledge]` block into your `config.toml` (`embedding_api_key` and an optional `vision_api_key`, stored as `enc2:<hex>`, encrypted at rest like `api_key`). Key resolution order (from `rantaiclaw setup knowledge` and `src/kb/`):
+
+| Source | Notes |
+|---|---|
+| `[knowledge].embedding_api_key` (config) | Set by the wizard; encrypted at rest |
+| `KB_EMBEDDING_API_KEY` (env) | Overrides config at load |
+| `OPENROUTER_API_KEY` (env) | Final fallback (the default embedding endpoint is OpenRouter) |
+
+The optional OCR/vision key (`[knowledge].vision_api_key` / `KB_EXTRACT_VISION_API_KEY`) is used to read scanned or image-layout PDFs and images. **When unset, it falls back to the embedding key**, so a single OpenRouter key gets you both embedding and OCR.
+
+> Configuring KB keys from `setup` / `onboard` / the gateway landed in **v0.7.0**; before that the keys were environment-variable-only. If you skip this step, KB calls fail with a clear `kb_not_configured` message (see the pitfall below).
+
+## 2. Ingest your documents
+
+Ingest a file — extract, chunk, embed, and store it in one command:
+
+```bash
+rantaiclaw kb ingest ./policy.pdf --category INSURANCE --group billing
+```
+
+Useful flags (`rantaiclaw kb ingest <path>`): `--title`, `--category`, `--group`, `--json`. Supported inputs:
+
+- **PDF** — text-layer first; scanned / brochure-style PDFs route to the vision-LLM OCR path (the per-page sufficiency + density guard was fixed in **v0.6.90**, so image-layout PDFs no longer ingest as thin, unreadable text).
+- **Markdown, plain text, source code** (`.md`, `.txt`, `.rs`, `.py`, `.ts`, …).
+- **Images** (`.png`, `.jpg`, `.jpeg`, `.webp`) — OCR via a vision LLM.
+- **Office** (`.docx`, `.xlsx`) — requires the `kb-office` build.
+
+Confirm what landed:
+
+```bash
+rantaiclaw kb list
+```
+
+## 3. Query from chat and from the CLI
+
+**From the CLI** — hybrid vector + BM25 retrieval, TOON output by default:
+
+```bash
+rantaiclaw kb search "what is the coverage limit?" --top 5
+rantaiclaw kb search "..." --json          # JSON for scripted callers
+```
+
+**From chat** — when a `kb.db` exists at the resolved path, the agent loop auto-injects an ambient context block telling the model it can shell out via `rantaiclaw kb search "<query>"`. No MCP server or tool registration is needed; the agent uses its existing `shell` capability under the normal policy + autonomy gates.
+
+> The agent can only reach the KB if `rantaiclaw` is permitted in the shell allowlist. If your autonomy preset does not allow it, add `rantaiclaw` to `[autonomy].allowed_commands`.
+
+The database path resolves to `KB_DB_PATH` if set, otherwise the platform data dir (`~/.local/share/rantaiclaw/kb.db` on Linux).
+
+## 4. (Optional) Document Intelligence and GraphRAG
+
+Two independent, opt-in layers turn the KB into a cross-document knowledge graph. Both are **off by default** and change nothing about plain ingest/retrieval unless enabled.
+
+- **Document Intelligence** (`KB_INTELLIGENCE_ENABLED=true`, added in **v0.6.94**) extracts entities + relations at ingest and merges the same entity across documents into one global node. Inspect it with `rantaiclaw kb intelligence <document_id>` and `rantaiclaw kb graph`.
+- **GraphRAG** (`KB_GRAPHRAG_ENABLED=true`, added in **v0.6.95**) feeds that graph back into retrieval: query terms seed graph entities, one hop of neighbours is expanded, and the chunks that mention them join the existing RRF fusion as a third ranked arm. It is fail-soft — a graph error degrades to plain vector + BM25 — and has no effect until the graph is populated (i.e. you ingested with Document Intelligence on).
+
+```bash
+export KB_INTELLIGENCE_ENABLED=true    # extract entities/relations at ingest
+export KB_GRAPHRAG_ENABLED=true        # let the graph improve search answers
+```
+
+See [Knowledge Base → Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence) for the full env-var matrix.
+
+## Pitfall: `kb_not_configured`
+
+If a KB command returns `kb_not_configured`, no embedding API key was resolved — this message is raised in `src/kb/axi/api.rs`. Fix it by running `rantaiclaw setup knowledge` or exporting `KB_EMBEDDING_API_KEY` (the optional `KB_EXTRACT_VISION_API_KEY` falls back to the embedding key). See [Troubleshooting → Knowledge Base](/docs/reference/troubleshooting).
+
+## Where to go next
+
+- [Knowledge Base overview](/docs/knowledge-base)
+- [Ingesting documents](/docs/knowledge-base/ingesting)
+- [Searching & retrieval](/docs/knowledge-base/search-retrieval)
+- [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence)
+- [Configuration & keys](/docs/knowledge-base/configuration)
+- [CLI & HTTP API reference](/docs/knowledge-base/reference)

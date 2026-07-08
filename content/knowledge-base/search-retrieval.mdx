@@ -1,0 +1,94 @@
+---
+title: Searching & Retrieval
+description: Hybrid vector + BM25 retrieval fused with Reciprocal Rank Fusion, an optional reranker, a per-document diversity cap, and the tuning ladder that crossed the recall parity gate.
+---
+
+# Searching & Retrieval
+
+Retrieval turns a natural-language question into a ranked set of chunks plus an LLM-ready context block. The pipeline lives in `src/kb/retrieve/` and is orchestrated by `Retriever::retrieve`.
+
+## Hybrid retrieval
+
+Every query runs two arms concurrently and fuses them:
+
+1. **Vector arm** — embed the query, then a nearest-neighbour search over the `sqlite-vec` table.
+2. **BM25 arm** — lexical search over the FTS5 index. Fail-soft: a store error here degrades to vector-only rather than failing the query. Enabled by default (`KB_HYBRID_BM25_ENABLED`, default `true`).
+
+The two ranked lists are merged with **Reciprocal Rank Fusion (RRF)**. The RRF constant is `k = 60` (the Cormack/Clarke 2009 standard), verified in both `RrfOptions::default` (`src/kb/retrieve/rrf.rs`) and the fusion call site in `src/kb/retrieve/mod.rs`. A chunk found by both arms accumulates score from each; vector metadata wins ties over BM25-only hits.
+
+When neither the BM25 arm nor the (optional) graph arm produces hits, the pipeline skips fusion and ranks by vector similarity directly.
+
+## The similarity floor, candidate pool, and per-document cap
+
+- **Minimum similarity** — chunks below `0.30` cosine similarity are dropped before they reach the LLM (`DEFAULT_MIN_SIMILARITY` in `src/kb/retrieve/mod.rs`). Callers can override it per request (the HTTP `search` body accepts `min_similarity`).
+- **Wider candidate pool** — without a reranker, the pipeline fetches `max_chunks × 4` candidates (`DIVERSIFY_FETCH_MULTIPLIER = 4`) so under-represented documents have chunks in the pool to promote. With a reranker it fetches the larger of `rerank_initial_k` (default `20`) and `max_chunks`.
+- **Per-document cap** — the final top-K is diversified so no single document contributes more than `3` chunks to the front of the list (`DEFAULT_MAX_PER_DOC = 3`). Over-cap chunks are pushed to the tail, not dropped.
+
+> The wider candidate pool and per-document cap shipped in **v0.6.90**: a single answer used to cluster in a few documents, so retrieval now fetches a wider pool and caps chunks per document, letting multi-document questions span more sources.
+
+## Optional stages
+
+Each of these is off by default and layers onto the hybrid baseline:
+
+| Stage | Env flag (default) | What it does |
+|---|---|---|
+| Reranker | `KB_RERANK_ENABLED` (`false`) | Reorders the fused pool down to the top-K. Providers: LLM (OpenRouter), Cohere, vLLM. Only fires when the fused set is larger than `max_chunks`; on error it falls back to the fused order. |
+| Query expansion | `KB_QUERY_EXPANSION_ENABLED` (`false`) | Generates paraphrases (default `3`), embeds all of them, and unions results by max similarity. |
+| Contextual retrieval | `KB_CONTEXTUAL_RETRIEVAL_ENABLED` (`false`) | Adds an LLM-generated context prefix to each chunk at ingest time. |
+
+A third, graph-augmented arm (GraphRAG) can also join the RRF fusion when the knowledge graph is populated. It is covered on [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence).
+
+## Searching from the CLI
+
+```bash
+rantaiclaw kb search "what is the coverage limit?" --top 5
+```
+
+TOON output (default):
+
+```
+chunks[5]{document,section,score,content_preview}:
+  Insurance Policy,Coverage,0.91,The maximum coverage limit is...
+  Insurance Policy,Coverage,0.84,Deductibles apply per claim...
+  ...
+```
+
+Flags (`src/kb/axi/cli.rs`):
+
+| Flag | Effect |
+|---|---|
+| `--top <n>` | Max chunks to return. Default `5`. |
+| `--group <g>` | Filter to a KB group. Repeat for multiple. |
+| `--category <c>` | Filter to a category. |
+| `--json` | Emit JSON instead of TOON. |
+
+For scripted callers, `--json` returns the context block, the deduplicated source list, and the raw chunks.
+
+## Searching over HTTP
+
+```
+POST /api/v1/kb/search
+```
+
+JSON body — `{ "query", "top?", "groups?", "category?", "min_similarity?" }`. When `top` is omitted the request falls back to `KB_DEFAULT_MAX_CHUNKS` (default `8`), unlike the CLI whose `--top` defaults to `5`. See [CLI & HTTP API Reference](/docs/knowledge-base/reference) for the response shape.
+
+## Tuning ladder and benchmarks
+
+The default `KbConfig::from_env()` settings are tuned to cross a recall-parity gate. From `docs/kb-tuning.md` (Phase 12, corpus of 161 documents):
+
+| Metric | Value | Threshold |
+|---|---|---|
+| `hit@8` recall | 0.867 | ≥ 0.85 |
+| Passing queries | 26 / 30 | — |
+
+All four "misses" were fixture-curation artifacts (short title-prefixes in the expected set), not retrieval failures — the retriever ranked the right document in the top-8 for every query.
+
+If recall regresses, `docs/kb-tuning.md` prescribes a ladder, applied cheapest-first: raise `KB_DEFAULT_MAX_CHUNKS` from `8` → `10`/`12`; enable the reranker; enable query expansion; enable contextual retrieval; then tune the smart chunker.
+
+On latency, `docs/kb-bench.md` (Phase 12, 50-document synthetic corpus, in-process fake embedder) records every retrieve call — single-query embed → vector search → BM25 search → RRF fusion → prompt assembly — completing in **under 1.1 ms**. The storage layer is well under the network round-trip the real embedding call costs, so end-to-end latency is dominated by the embedding hop, not the Rust pipeline.
+
+## See also
+
+- [Ingesting Documents](/docs/knowledge-base/ingesting) — getting documents into the store.
+- [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence) — the optional third retrieval arm.
+- [Configuration & Keys](/docs/knowledge-base/configuration) — the full `KB_*` list.

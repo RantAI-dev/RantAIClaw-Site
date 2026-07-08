@@ -11,7 +11,7 @@ After [installing](/docs/getting-started/install), bring up your first agent wit
 rantaiclaw setup
 ```
 
-The wizard walks you through six decisions, each with a sensible default. It writes a profile under `~/.rantaiclaw/profiles/default/` (or whichever profile is active — see [Profiles](/docs/concepts/profiles)).
+The wizard walks you through seven decisions, each with a sensible default. It writes a profile under `~/.rantaiclaw/profiles/default/` (or whichever profile is active — see [Profiles](/docs/concepts/profiles)).
 
 ## 1. Provider
 
@@ -32,14 +32,14 @@ You can [add more providers later](/docs/guides/adding-a-provider) without resta
 
 Choose how much human-in-the-loop oversight tool calls require. The wizard offers four named presets:
 
-| Preset | What it writes |
+| Preset | What it does |
 |---|---|
-| **L1 — Manual** | Narrow auto-approve list, strict command allowlist; almost everything prompts |
-| **L2 — Smart** | Curated auto-approve list (read tools + safe shell patterns like `ls *`, `cat *`, `git status`) |
-| **L3 — Strict** | Deny-by-default, allows only the L2 read set + memory writes + skill installs + cron / session ops |
-| **L4 — Off** | Runtime `level = "full"`; auto-approves everything except forbidden paths and high-risk commands |
+| **Manual** | Prompt for every tool call (safest) |
+| **Smart** | Safe read-only commands pre-allowed (recommended) |
+| **Strict** | Deny-by-default, no prompts (unattended agents) |
+| **Off** | No gating at all (CI / fully-trusted only) |
 
-L2 is the recommended starting default. See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full mechanics — the runtime enum has only three values (`read_only`, `supervised`, `full`); the L1–L4 names are preset bundles the wizard writes.
+**Smart** is the recommended starting default. See [Autonomy Levels](/docs/concepts/autonomy-levels) for the full mechanics — the runtime enum has only three values (`read_only`, `supervised`, `full`); the **Manual / Smart / Strict / Off** names are preset bundles the wizard writes (the numeric `L1`–`L4` prefixes were dropped in v0.6.40, though legacy ids still parse).
 
 ## 3. Channels
 
@@ -87,6 +87,18 @@ If you want the agent's process tree to supervise [Model Context Protocol](https
 
 > **Important caveat:** today the supervisor only manages the *processes*. The MCP servers' tools are **not yet integrated with the agent loop** — the LLM cannot directly call MCP-server tools. This is documented work-in-progress; see [MCP Servers](/docs/concepts/mcp).
 
+## 7. Knowledge Base (optional)
+
+The default binary ships with the `kb` feature, so a bare `rantaiclaw setup` (or `onboard`) offers a Knowledge Base step. It lets the agent search documents you ingest. The wizard:
+
+1. Asks whether to enable the Knowledge Base (default: no).
+2. Resolves an **embedding API key** — reuse the main provider key when it's an OpenRouter key, enter a separate key, or skip (which leaves the Knowledge Base disabled).
+3. Optionally resolves an **OCR / vision key** for scanned documents — reuse the embedding key, enter a different key, or skip OCR.
+
+Both keys are written to `[knowledge]` in the active profile's `config.toml` (`embedding_api_key` / `vision_api_key`) and encrypted at rest as `enc2:<hex>`. Environment variables override the stored config at load: `KB_EMBEDDING_API_KEY` for embeddings and `KB_EXTRACT_VISION_API_KEY` for OCR/vision, with `OPENROUTER_API_KEY` as the final fallback for both.
+
+You can (re)configure just this section later with `rantaiclaw setup knowledge`. For ingestion, retrieval, and the full option surface, see [Knowledge Base](/docs/knowledge-base) and its [Configuration](/docs/knowledge-base/configuration) reference.
+
 ## Start chatting
 
 The simplest way to talk to your agent:
@@ -125,7 +137,7 @@ All under `~/.rantaiclaw/`:
 | `~/.rantaiclaw/active_profile` | Plain text — name of the active profile |
 | `~/.rantaiclaw/profiles/<name>/config.toml` | Per-profile static config (encrypted secrets stored inline as `enc2:<hex>`) |
 | `~/.rantaiclaw/profiles/<name>/persona/persona.toml` + `SYSTEM.md` | Persona definition |
-| `~/.rantaiclaw/profiles/<name>/policy/autonomy.toml` | Autonomy level + per-tool lists (written by L1–L4 preset selector) |
+| `~/.rantaiclaw/profiles/<name>/policy/autonomy.toml` | Autonomy level + per-tool lists (written by the Manual / Smart / Strict / Off preset selector) |
 | `~/.rantaiclaw/profiles/<name>/policy/command_allowlist.toml` | Quote-aware glob patterns for shell |
 | `~/.rantaiclaw/profiles/<name>/policy/forbidden_paths.toml` | Path blocklist |
 | `~/.rantaiclaw/profiles/<name>/skills/` | Locally installed skills |

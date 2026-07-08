@@ -1,0 +1,95 @@
+---
+title: CLI & HTTP API Reference
+description: A flat contract reference for the KB — the full rantaiclaw kb subcommand table with TOON/JSON and exit-code semantics, and the /api/v1/kb/* HTTP route table with the auth model, upload cap, and lazy-init/503 behavior.
+---
+
+# CLI & HTTP API Reference
+
+The Knowledge Base is exposed through two flat contracts: the `rantaiclaw kb` CLI (agent-shellable, TOON by default) and the `/api/v1/kb/*` HTTP API (JSON). Both are backed by the same store and retrieval pipeline; the CLI lives in `src/kb/axi/cli.rs` and the HTTP surface in `src/kb/axi/api.rs`.
+
+## CLI: `rantaiclaw kb`
+
+The CLI is an "axi-cli" surface: idempotent, never interactive, TOON output by default, `--json` toggles JSON. Each subcommand is gated by the `kb` feature (built into the default binary).
+
+| Subcommand | Purpose | Flags |
+|---|---|---|
+| `kb search <query>` | Hybrid retrieval (vector + BM25, optional rerank + GraphRAG). | `--top <n>` (default `5`), `--group <g>` (repeatable), `--category <c>`, `--json` |
+| `kb ingest <path>` | Extract + chunk + embed + store a file. | `--title <t>`, `--category <c>` (repeatable), `--group <g>` (repeatable), `--json` |
+| `kb list` | List documents. | `--organization <id>`, `--json` |
+| `kb get <id>` | Show one document by id. | `--json` |
+| `kb delete <id>` | Delete a document. Defaults to soft-delete (sets `deleted_at`, hides from search). | `--hard` (permanent row removal) |
+| `kb drift` | Report chunks embedded with a non-current model. | `--json` |
+| `kb re-embed` | Re-embed chunks with the currently-configured model. | `--include-current`, `--dry-run`, `--batch-size <n>` (default `100`), `--json` |
+| `kb intelligence <document_id>` | Per-document extracted entities + relations. | `--json` |
+| `kb graph` | Cross-document knowledge graph (top entities by degree). | `--group <g>`, `--limit <n>` (default `KB_GRAPH_MAX_NODES`), `--json` |
+
+`kb delete` has no `--json` flag — it always prints a small TOON `result` block. `kb intelligence`, `graph`, `re-embed`, and `drift` cover the Document Intelligence and maintenance surfaces documented in [Document Intelligence & GraphRAG](/docs/knowledge-base/document-intelligence) and [Searching & Retrieval](/docs/knowledge-base/search-retrieval).
+
+### Output: TOON by default, `--json` to switch
+
+TOON (Token-Optimized Object Notation) is a compact tabular form that costs fewer tokens than JSON while staying machine-parsable (`src/kb/axi/toon.rs`). The header declares the row count and the projected columns; each row is indented two spaces:
+
+```
+chunks[5]{document,section,score,content_preview}:
+  Insurance Policy,Coverage,0.91,The maximum coverage limit is…
+  Insurance Policy,Coverage,0.84,Deductibles apply per claim…
+```
+
+Everything goes to stdout — operators grep one stream, agents parse one stream. Passing `--json` emits pretty-printed JSON instead, for scripted callers.
+
+### Exit-code contract
+
+Every subcommand returns one of two exit codes (documented in `src/kb/axi/cli.rs`):
+
+| Exit | Meaning |
+|---|---|
+| `0` | Success — output already printed. |
+| `1` | Operational failure (e.g. document not found, empty extraction). A TOON `error[1]{code,message}:` block is printed to stdout. |
+| `1` (internal) | Internal failure (DB unreachable, bad config) surfaces as `Err(KbError)`; `main.rs` renders a TOON error block to stdout and exits `1`. |
+
+## HTTP API: `/api/v1/kb/*`
+
+When the gateway runs with the `kb` feature, the following routes are mounted (`router()` in `src/kb/axi/api.rs`). Bodies and responses are JSON.
+
+| Method | Route | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/kb/search` | Hybrid retrieval. Body: `{ query, top?, groups?, category?, min_similarity? }`. |
+| `POST` | `/api/v1/kb/documents` | Ingest — `multipart/form-data` file upload + metadata. |
+| `GET` | `/api/v1/kb/documents` | List documents (metadata-only summaries). `?organization=<id>`. |
+| `GET` | `/api/v1/kb/documents/{id}` | Get one full document. |
+| `DELETE` | `/api/v1/kb/documents/{id}` | Delete. `?hard=true` for permanent; default soft. |
+| `GET` | `/api/v1/kb/groups` | List KB groups. |
+| `POST` | `/api/v1/kb/groups` | Create a group. Body: `{ name, description?, color? }`. |
+| `GET` | `/api/v1/kb/groups/{id}` | Get one group. |
+| `PUT` | `/api/v1/kb/groups/{id}` | Update a group. |
+| `DELETE` | `/api/v1/kb/groups/{id}` | Delete a group. |
+| `GET` | `/api/v1/kb/groups/{id}/documents` | List a group's documents. |
+| `POST` | `/api/v1/kb/groups/{id}/documents` | Add a document to a group. Body: `{ document_id }`. |
+| `DELETE` | `/api/v1/kb/groups/{id}/documents/{doc_id}` | Remove a document from a group. |
+| `GET` | `/api/v1/kb/drift` | Embedding staleness report. |
+| `POST` | `/api/v1/kb/re-embed` | Re-embed. Body: `{ include_current?, dry_run?, batch_size? }` (default batch `100`). |
+| `GET` | `/api/v1/kb/documents/{id}/intelligence` | Per-document entities + relations. |
+| `POST` | `/api/v1/kb/documents/{id}/re-extract` | Re-run extraction for one document. |
+| `GET` | `/api/v1/kb/graph` | Cross-document graph. `?group=<g>&limit=<n>`. |
+
+### Auth model
+
+Authentication mirrors the rest of `/api/v1/*`: the pairing/bearer rules from the `[gateway]` config apply unchanged (`check_auth` in `src/kb/axi/api.rs`). When `require_pairing = true`, every route needs `Authorization: Bearer <token>` — pair via `POST /pair` first. When `require_pairing = false` (the local-dev default), requests pass through.
+
+### Upload cap
+
+Ingest uploads are capped at **32 MiB per request** (`KB_UPLOAD_MAX_BYTES = 32 * 1024 * 1024`). A larger upload is rejected by the body-limit layer before any handler runs. The KB subtree also carries a longer per-request timeout (600 s, vs. the gateway-wide 120 s) because ingest embeds every chunk through the possibly-remote embedding provider.
+
+### Lazy init & the 503 fail-fast
+
+The heavy KB plumbing — config, sqlite-vec store, embedder, optional reranker — is built once per process and cached (`KbContext`, guarded by a `tokio::sync::Mutex` keyed on the resolved DB path). The first request to land triggers initialization; subsequent requests share the same handles.
+
+> **Init failures cache as `Err`.** A failed build (missing embedding key, unreachable DB) is cached and surfaces as **503** on every subsequent call until the gateway restarts — this is intentional fail-fast behavior, not a per-request retry. A missing key returns `503 kb_not_configured`; other build failures return `503 kb_unavailable`. Operators fix the env (or `PUT /api/v1/config/knowledge`, which flushes the cache) and the next request rebuilds. Per-request KB errors map by kind: `NotFound` → 404, `Config` / unsupported file type → 400, upstream embedding/chat failures → 502, anything else → 500.
+
+The entire module is `#[cfg(feature = "kb")]` at the gateway-import level, so a non-KB build never mounts these routes or pays the compile cost.
+
+## See also
+
+- [Reference → CLI](/docs/reference/cli) — every top-level `rantaiclaw` command.
+- [Knowledge Base](/docs/knowledge-base) — the subsystem overview and the three consumption surfaces.
+- [Configuration & Keys](/docs/knowledge-base/configuration) — the `KB_*` knobs behind these surfaces.

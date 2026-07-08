@@ -37,6 +37,12 @@ You enabled the channel but did not add anyone to its allowlist. Most channels t
 **Email replies to everyone, not just my allowlist**
 Email is the one channel that allows-all on empty `allowed_senders`. Set explicit allowed senders or domain prefixes (`@example.com`) to restrict it.
 
+**WhatsApp bot "types but never replies", or your owner commands are ignored**
+WhatsApp delivers many direct chats through a privacy LID (`<id>@lid`) rather than your phone number. On older builds the reply landed in a hidden LID thread you never see (so the bot appeared to "type but never reply" — fixed in v0.6.91), and the inbound sender was the opaque LID, so it never matched `approval_owners` and you were silently treated as a guest — owner-only features (cron, permissions, owner commands) went dark and surfaced as empty / "no final answer" replies (fixed in v0.6.93). Upgrade to >= 0.6.93, then set your real phone number in `[channels_config.whatsapp].allowed_numbers` (instead of `*`) and in `[channels_config].approval_owners`.
+
+**Duplicate or contradictory replies, `Telegram getUpdates 409 Conflict`, or gateway `:3000 address already in use`**
+Two processes are running the same channel — most often a background daemon *and* an interactive TUI both polling one bot token, or two daemons. Run exactly one runner per token. Since v0.6.92 (single-runner) a TUI defers channel startup to a live daemon via the `.daemon_active` sentinel and every listener holds an advisory per-channel lock, so upgrade to >= 0.6.92 and let the daemon own the channel while the TUI defers.
+
 ## Gateway
 
 **`Refusing to bind to 0.0.0.0 — set [gateway].allow_public_bind = true`**
@@ -51,7 +57,7 @@ Tokens are stored as SHA-256 hashes — you cannot recover them from `[gateway].
 ## Approval / Autonomy
 
 **Tool calls from Discord/Slack are silently denied**
-Non-CLI channels have no remote approval flow today — the dispatcher hard-codes `ApprovalResponse::No` for anything not in `[autonomy].auto_approve`. Either add the tool to `auto_approve`, or for shell commands add a pattern to `<profile>/policy/command_allowlist.toml`.
+Channels have an in-chat approval relay (since v0.6.84, `src/channels/approval_relay.rs`): when the agent needs approval, the bot posts a prompt to the chat and an authorized owner approves it inline. Reply `/approve` — or a bare `approve`, `yes`, `y`, `ok` — to allow the single pending request; `/deny` or `no` rejects it and is honored from anyone (stopping an action is always safe). With multiple requests pending, the bot lists them and asks you to pick one by name. Only senders in `[channels_config].approval_owners` may *approve* — being able to chat with the bot does not grant approval authority. For unattended setups where no one is watching the chat, add the tool to `[autonomy].auto_approve` instead, or for shell commands add a pattern to `<profile>/policy/command_allowlist.toml`.
 
 **`rantaiclaw chat` hangs after a tool call**
 The CLI approval prompt blocks on `stdin.read_line` with no timeout — `timeout_secs` is written to the policy file but no consumer reads it yet. Type `y` or `n`. If you've launched the agent in a non-interactive context where stdin isn't connected, add the tool to `auto_approve` instead.
@@ -93,6 +99,11 @@ Plus an API key in env or in the appropriate provider block.
 
 **`brain.db` missing after a redeploy**
 If you enabled `[memory] snapshot_enabled = true`, Core memories are auto-hydrated from `MEMORY_SNAPSHOT.md` on cold boot. Otherwise the agent starts fresh. Mount the workspace volume between deploys to preserve memory.
+
+## Knowledge Base
+
+**`kb_not_configured`**
+The Knowledge Base has no embedding API key resolved, so it cannot embed or search — this message is raised in `src/kb/axi/api.rs`. Fix it by running `rantaiclaw setup knowledge` (which stores the key encrypted in the `[knowledge]` config block) or by exporting `KB_EMBEDDING_API_KEY`. The optional OCR/vision key `KB_EXTRACT_VISION_API_KEY` falls back to the embedding key when unset, and `OPENROUTER_API_KEY` is the final fallback. Added in v0.7.0. See the [Knowledge Base recipe](/docs/recipes/knowledge-base) and [Knowledge Base → Configuration](/docs/knowledge-base/configuration).
 
 ## Profile / paths
 

@@ -1,0 +1,180 @@
+---
+title: Document Intelligence & GraphRAG
+description: Optional entity/relation extraction over ingested documents that builds a cross-document knowledge graph, plus GraphRAG — a third RRF retrieval arm that feeds that graph back into search. Off by default.
+---
+
+# Document Intelligence & GraphRAG
+
+Document Intelligence extracts named entities and the typed relations between them from every document you ingest, then merges the *same* entity across documents into a single global node — a real cross-document knowledge graph, not per-document scoping. GraphRAG is a separate, independently opt-in layer that feeds that graph back into retrieval.
+
+Both features are **off by default** and neither changes ingest, retrieval, or any existing KB behavior unless you enable it. The subsystem lives in `src/kb/intelligence/` and its storage seam is the `IntelligenceStore` trait (`src/kb/store/sqlite/intelligence.rs`). It shipped in **v0.6.94** (extraction + graph), was hardened in **v0.6.95** / **v0.6.97**, and gained GraphRAG in **v0.6.95**.
+
+## What extraction does
+
+When `KB_INTELLIGENCE_ENABLED=true`, each ingest run extracts entities and relations from the document's chunks. Two passes contribute (`extract_document_intelligence` in `src/kb/intelligence/mod.rs`):
+
+1. **LLM pass** — one chat-completion POST **per chunk** (`CombinedLlmExtractor` in `src/kb/intelligence/extract/llm.rs`), accumulated across all chunks. A chunk whose response fails or doesn't parse is skipped — extraction is fail-soft, so a bad chunk never fails the ingest.
+2. **Pure-Rust regex pass** — a no-LLM pass that pulls high-precision types (emails and URLs) directly from the chunk text (`extract_pattern_entities` in `src/kb/intelligence/extract/pattern.rs`). These entities are stored at confidence `1.0`.
+
+Entities carry a typed kind (`Person`, `Organization`, `Location`, `Product`, `Technology`, `Concept`, `Event`, `Date`, `Email`, `Url`, `Phone`, `Money`, `Function`, `Api`, `Error`, `File`, or a free-form `Other`) and relations a typed kind (`WorksFor`, `PartOf`, `LocatedIn`, `Implements`, `Calls`, `DependsOn`, `Uses`, `Produces`, `RelatedTo`, or `Other`) — the enums in `src/kb/intelligence/types.rs`. Unknown values from the LLM fall back to `Other` leniently rather than erroring.
+
+### When extraction runs
+
+Extraction runs automatically after each ingest, but *how* it runs differs by surface:
+
+| Surface | Extraction timing |
+|---|---|
+| HTTP ingest (`POST /api/v1/kb/documents`) | **Fire-and-forget** — detached via `tokio::spawn`, so the ingest response returns immediately and an extraction failure never affects the upload result. |
+| CLI ingest (`rantaiclaw kb ingest …`) | **Inline** — awaited after ingest completes. The CLI is a short-lived process that would drop a detached task before it ran, so it runs synchronously. A failure is logged (doc id only), never propagated. |
+
+Either way, an ingest succeeds regardless of whether extraction succeeds.
+
+## Cross-document entity merge
+
+Entities from different documents are merged into one shared global node when they resolve to the same canonical key. Resolution is **exact** by default (`KB_INTELLIGENCE_RESOLUTION=exact`): the normalized name plus type. In storage this is an `UPSERT` keyed by `canonical_key` (`upsert_entity` in `src/kb/store/sqlite/intelligence.rs`) — the first-seen node keeps its identity (id, name, type), while a later extraction merges into it. An `embedding` (fuzzy) mode is reserved in config but not yet implemented; `exact` is the only shipped strategy.
+
+### The `kb.db` tables
+
+Intelligence added three additive tables to `kb.db` (SQLite `SCHEMA_VERSION` `1` → `2` in `src/kb/store/sqlite/schema.rs` — this is the KB database schema, distinct from the `config.toml` schema version):
+
+| Table | Holds |
+|---|---|
+| `entity` | Global nodes, deduplicated by `canonical_key UNIQUE`. Columns: id, canonical_key, name, type, confidence, metadata, created_at. |
+| `entity_mention` | Links an entity to a source document (and chunk index, when from the regex pass). |
+| `entity_relation` | Typed edges between two entity ids, scoped to the document they were extracted from. |
+
+The migration is additive and burns no config schema slot — the SQLite tables are created with `CREATE TABLE IF NOT EXISTS`, so an older `kb.db` upgrades in place on first open.
+
+### Confidence handling
+
+Confidence has been through two fixes worth knowing about when you read older graphs:
+
+- **v0.6.95** — the extractor prompt's structural example used `"confidence":0.0`, which the model echoed back verbatim, so every entity/relation surfaced as 0%. The prompt now uses realistic non-zero examples with an explicit "never 0" instruction, and parsed confidences are sanitised (non-positive / NaN → `0.5`, clamped to the `(0, 1]` range) so one misbehaving response can't resurface as 0%.
+- **v0.6.97** — `upsert_entity` used `ON CONFLICT(canonical_key) DO NOTHING`, so a re-extract could never lift a stale value. It now does `DO UPDATE SET confidence = max(confidence, excluded.confidence)`, keeping first-seen identity but raising confidence to the highest seen across mentions. Separately, a **hard** `delete_document` now clears the document's `entity_mention` / `entity_relation` rows and garbage-collects orphaned entities in one transaction; **soft** delete preserves intelligence because the document is recoverable.
+
+> **Re-extract after upgrading.** Cross-document entities created by an older binary won't be lifted automatically — they are only touched when a document that mentions them is re-extracted. Re-run extraction (via `POST /api/v1/kb/documents/{id}/re-extract`) to refresh existing confidences. Re-extraction is idempotent: it drops the document's prior mentions/relations first, then re-runs both passes.
+
+## GraphRAG (graph-augmented retrieval)
+
+GraphRAG feeds the populated graph back into retrieval so the graph improves answers, not just visualisations. It is opt-in and independent of extraction: set `KB_GRAPHRAG_ENABLED=true` (off by default). It has no effect unless the graph is already populated (i.e. you ran ingest with `KB_INTELLIGENCE_ENABLED=true`).
+
+How a query is augmented (`graph_expand_chunks` in `src/kb/store/sqlite/intelligence.rs`, wired in `src/kb/retrieve/mod.rs`):
+
+1. **Seed match** — entities whose name (≥3 chars) appears as a case-insensitive substring of the query become seeds. No LLM call; pure name matching. If nothing matches, GraphRAG contributes nothing and retrieval is bit-for-bit unchanged.
+2. **1-hop expansion** — the immediate neighbours of each seed in the relation graph are added, capped at `KB_GRAPHRAG_MAX_NEIGHBORS` (default `20`).
+3. **Candidate chunks** — the chunks that mention any seed-or-neighbour entity become extra retrieval candidates, ordered by how many matched entities each chunk mentions.
+4. **Merge into RRF** — those candidates join the existing Reciprocal Rank Fusion (`k = 60`) as a **third ranked arm**, alongside the vector and BM25 arms. Graph candidates never replace the other arms, and a chunk already found by vector/BM25 keeps its original metadata and score.
+
+The effect is recall: a chunk that is relevant only because it is *graph-connected* to something named in the query (for example, a product the named organisation makes) can surface even when its text is not a direct vector/keyword match. The intelligence handle is attached at both retrieval build sites — the CLI `kb search` path (which the agent shells out to) and the `POST /api/v1/kb/search` HTTP endpoint — so enabling the flag improves chat answers with no other change.
+
+> **Fail-soft.** A graph error during expansion degrades to plain vector + BM25 retrieval, never an error. When GraphRAG is disabled, or no intelligence handle is attached, or no entity name matches, the graph arm is empty and the fusion is unchanged.
+
+See [Searching & Retrieval](/docs/knowledge-base/search-retrieval) for how the vector and BM25 arms and RRF work.
+
+## Configuration
+
+All Document Intelligence knobs are environment-driven (verified in `src/kb/config.rs`). Because they are env-only, enabling any of them does not change the config schema fingerprint.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `KB_INTELLIGENCE_ENABLED` | `false` | Enable entity/relation extraction at ingest. |
+| `KB_INTELLIGENCE_MODEL` | `openai/gpt-4.1-nano` | Extraction model; routed through `KB_OPENROUTER_CHAT_URL`. |
+| `KB_INTELLIGENCE_RESOLUTION` | `exact` | Entity merge strategy — `exact` (normalized name + type). `embedding` (fuzzy) is reserved but not implemented. |
+| `KB_GRAPH_MAX_NODES` | `200` | Cap on nodes returned by the whole-KB graph endpoint (top-N by degree). |
+| `KB_GRAPHRAG_ENABLED` | `false` | Enable GraphRAG retrieval augmentation. |
+| `KB_GRAPHRAG_MAX_NEIGHBORS` | `20` | Cap on 1-hop neighbour entities expanded per query during GraphRAG. |
+
+The extractor authenticates with `KB_EMBEDDING_API_KEY` when set, otherwise falls back to `OPENROUTER_API_KEY` — the same resolution order as the embedding endpoint (`build_intelligence_extractor` in `src/kb/axi/api.rs`). See [Configuration & Keys](/docs/knowledge-base/configuration) for how keys are resolved.
+
+## HTTP endpoints
+
+All intelligence routes are under `/api/v1/kb/` and follow the same pairing/bearer auth as the rest of the KB API.
+
+### Per-document intelligence
+
+```
+GET /api/v1/kb/documents/{id}/intelligence
+```
+
+Returns the entities and relations extracted from one document, plus type-level stats. The `entity_type` / `relation_type` fields are the string form of the typed enum.
+
+```json
+{
+  "entities": [
+    { "id": "…", "name": "Acme Corp", "entity_type": "Organization", "confidence": 0.92 }
+  ],
+  "relations": [
+    { "id": "…", "source": "…", "target": "…", "relation_type": "Produces", "confidence": 0.85 }
+  ],
+  "stats": {
+    "total_entities": 12,
+    "total_relations": 8,
+    "entity_types": { "Person": 4, "Organization": 3 },
+    "relation_types": { "Produces": 5, "RelatedTo": 3 }
+  }
+}
+```
+
+### Whole-KB knowledge graph
+
+```
+GET /api/v1/kb/graph?group=<g>&limit=<n>
+```
+
+Returns the merged cross-document graph, optionally filtered to one group and capped to `limit` nodes (top-N by degree; the default cap is `KB_GRAPH_MAX_NODES`). Both query params are optional. Edges are the relations whose *both* endpoints fall inside the selected node set.
+
+```json
+{
+  "nodes": [
+    { "id": "…", "name": "Acme Corp", "entity_type": "Organization", "degree": 7, "doc_count": 3 }
+  ],
+  "edges": [
+    { "source": "…", "target": "…", "relation_type": "Produces" }
+  ],
+  "stats": { "total_nodes": 42, "total_edges": 61 }
+}
+```
+
+### Re-extract one document
+
+```
+POST /api/v1/kb/documents/{id}/re-extract
+```
+
+Re-runs extraction for one document (replacing any previously extracted entities/relations for it) and returns an extraction summary of the entity and relation counts.
+
+## CLI
+
+```bash
+rantaiclaw kb intelligence <document_id>          # per-document entities + relations (TOON)
+rantaiclaw kb intelligence <document_id> --json   # JSON output
+rantaiclaw kb graph                               # whole-KB graph (TOON)
+rantaiclaw kb graph --group <group_id>            # scope to one group's documents
+rantaiclaw kb graph --limit <n>                   # override the node cap
+rantaiclaw kb graph --json                        # JSON output
+```
+
+TOON output follows the same `key[n]{fields}:` convention as the rest of the KB CLI. `kb intelligence` prints two blocks and `kb graph` prints two blocks (`src/kb/axi/cli.rs`):
+
+```
+entities[12]{id,name,entity_type,confidence}:
+  ent_01,Acme Corp,Organization,0.92
+  ent_02,Billing Policy,Concept,0.88
+relations[8]{source,target,relation_type,confidence}:
+  ent_01,ent_02,Produces,0.85
+```
+
+```
+nodes[42]{id,name,entity_type,degree,doc_count}:
+  ent_01,Acme Corp,Organization,7,3
+edges[61]{source,target,relation_type}:
+  ent_01,ent_02,Produces
+```
+
+> **Web console graph explorer.** The interactive Knowledge Graph explorer and per-document intelligence drawer are not part of the crate — they live in the separate `claw-ui` repository and consume these same HTTP endpoints.
+
+## See also
+
+- [Searching & Retrieval](/docs/knowledge-base/search-retrieval) — the vector + BM25 arms and RRF that GraphRAG augments.
+- [Configuration & Keys](/docs/knowledge-base/configuration) — the extraction API key resolution.
+- [CLI & HTTP API Reference](/docs/knowledge-base/reference) — the full subcommand and endpoint contract.

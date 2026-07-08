@@ -42,18 +42,21 @@ These live at the root of `config.toml`:
 
 | Key | Type | Default |
 |---|---|---|
-| `schema_version` | int | written by migrations; do not edit by hand |
+| `schema_version` | int | current `10` (v0.7.0-alpha); written by migrations, do not edit by hand |
 | `default_provider` | string | `"openrouter"` |
 | `default_model` | string | `"anthropic/claude-sonnet-4.6"` |
 | `default_temperature` | float | `0.7` |
 | `api_key` | string (encrypted as `enc2:<hex>`) | — |
+| `provider_api_keys` | table `provider → key` (each value encrypted as `enc2:<hex>`) | `{}` |
 | `api_url` | string | (provider default) |
 
 `workspace_dir` and `config_path` exist on the in-memory `Config` struct but are `#[serde(skip)]` — they are populated by the loader and cannot be set in `config.toml`.
 
+`provider_api_keys` (added in schema v6 / v0.6.81, defined in `src/config/schema.rs`) is a per-provider encrypted key store so switching the active provider never reuses another provider's credential. Resolution is provider-aware (`Config::resolve_key_for_provider`): the per-provider entry keyed by canonical provider name is consulted first, then the top-level `api_key` **only** when the requested provider is the active `default_provider`, then the provider-specific env var — so a stale top-level key is never sent to the wrong provider.
+
 ## Top-level sections
 
-The `Config` struct in `src/config/schema.rs` has 32 sections:
+The `Config` struct in `src/config/schema.rs` has 34 sections (`[knowledge]` was added in schema v10 / v0.7.0-alpha):
 
 | Section | Purpose |
 |---|---|
@@ -76,6 +79,7 @@ The `Config` struct in `src/config/schema.rs` has 32 sections:
 | `[tunnel]` | cloudflared / ngrok |
 | `[gateway]` | HTTP control plane (host, port, allow_public_bind, paired_tokens, rate limits) |
 | `[composio]` | Composio integration |
+| `[knowledge]` | Knowledge Base credentials — `embedding_api_key`, `vision_api_key` (encrypted at rest) |
 | `[secrets]` | Encryption toggle |
 | `[browser]` | Browser tool settings |
 | `[http_request]` | HTTP request tool settings |
@@ -92,6 +96,69 @@ The `Config` struct in `src/config/schema.rs` has 32 sections:
 | `[mcp_servers]` | MCP server specs (table of named entries) |
 | `[security.sandbox]` | Sandbox enabled, backend selection — **not currently wired** (`SecurityConfig` is defined but not a field on `Config`; the section parses but has no effect) |
 | `[security.resources]` | Subprocess resource limits — **not currently wired** (same reason as above) |
+
+## Local-capability tool defaults (easy mode)
+
+Since v0.6.89 (schema v9), the local-capability surfaces ship **enabled by default** so a fresh install is useful without hand-editing config first. The *exposure* boundary (gateway bind, pairing, public-bind) stays deny-by-default. Each default below is defined in `src/config/schema.rs`:
+
+| Section / key | Default | Notes |
+|---|---|---|
+| `[web_search].enabled` | `true` | `web_search` tool on by default (`WebSearchConfig::default`) |
+| `[browser].enabled` | `true` | `browser_open` tool on by default (`BrowserConfig::default`) |
+| `[http_request].enabled` | `true` | `http_request` tool on by default |
+| `[http_request].allowed_domains` | `["*"]` | allow-all wildcard; if enabled with an **empty** list, all requests are rejected |
+| `[http_request].max_response_size` | `5242880` (5 MiB) | raised from 1 MB |
+| `[http_request].timeout_secs` | `20` | — |
+| `[autonomy].block_high_risk_commands` | `false` | shell high-risk guard off by default |
+| `[autonomy].max_actions_per_hour` | `200` | raised from 20 |
+| `[agent].max_tool_iterations` | `50` | raised from 25 so long multi-tool turns finish |
+| `[channels_config].message_timeout_secs` | `600` | raised from 300 |
+| `[reliability].provider_retries` | `3` | raised from 2 |
+
+Autonomy *level* still defaults to `Supervised` — the tool defaults above make the agent useful without changing the approval UX.
+
+## `[knowledge]` — Knowledge Base credentials
+
+`KnowledgeConfig` (defined in `src/config/schema.rs`) holds the two Knowledge Base API keys. Both are optional and **encrypted at rest** like the top-level `api_key`:
+
+```toml
+[knowledge]
+embedding_api_key = "enc2:..."   # embeddings (KB search/ingest)
+vision_api_key    = "enc2:..."   # OCR / vision extraction of images & scanned PDFs
+```
+
+| Key | Type | Encrypted | Purpose |
+|---|---|---|---|
+| `embedding_api_key` | string | yes (`enc2:<hex>`) | embedding provider key for KB indexing + retrieval |
+| `vision_api_key` | string | yes (`enc2:<hex>`) | vision/OCR key for extracting text from images and scanned PDFs |
+
+**Credential resolution.** At load, env vars fold onto `config.knowledge` (env wins, matching `api_key` precedence — see `apply_env_overrides` in `src/config/schema.rs`):
+
+1. `KB_EMBEDDING_API_KEY` / `KB_EXTRACT_VISION_API_KEY` env — overrides the config value at load.
+2. `[knowledge].embedding_api_key` / `vision_api_key` config value — used when the env var is unset.
+3. `OPENROUTER_API_KEY` env — the final fallback applied downstream (`KbConfig::resolve_key`).
+
+Note the env var for the vision key is `KB_EXTRACT_VISION_API_KEY`, while the config key is `vision_api_key`.
+
+If no key resolves through any of those, KB endpoints return the actionable `kb_not_configured` error (`src/kb/axi/api.rs`):
+
+```
+kb_not_configured: no embedding API key. Add one via
+`rantaiclaw setup knowledge` or set KB_EMBEDDING_API_KEY.
+```
+
+**KB runtime tuning env vars.** Everything except the two credentials is read from `KB_*` env vars at runtime (`KbConfig::from_env` in `src/kb/config.rs`), not from `config.toml`. Common ones:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `KB_DB_PATH` | XDG data dir → `./kb.db` | KB SQLite database path |
+| `KB_EMBEDDING_MODEL` | `qwen/qwen3-embedding-8b` | embedding model id |
+| `KB_HYBRID_BM25_ENABLED` | `true` | BM25 + vector hybrid retrieval (set `false` to disable) |
+| `KB_RERANK_ENABLED` | `false` | LLM reranking of results |
+| `KB_INTELLIGENCE_ENABLED` | `false` | document-intelligence graph extraction |
+| `KB_GRAPHRAG_ENABLED` | `false` | GraphRAG entity-graph retrieval augmentation |
+
+See [Knowledge Base → Configuration](/docs/knowledge-base/configuration) for the full `KB_*` list, and [Knowledge Base](/docs/knowledge-base) for ingesting, search & retrieval, and document intelligence.
 
 ## Channel config blocks
 
@@ -113,7 +180,7 @@ All env vars use the `RANTAICLAW_*` prefix. Common ones:
 | `RANTAICLAW_GOOGLE_CLIENT_ID` / `_SECRET` | OAuth flows for Google MCP servers |
 | `RANTAICLAW_OPEN_SKILLS_DIR` | Override open-skills path |
 
-Some legacy bare names (`API_KEY`, `MODEL`, `PROVIDER`, `HOST`, `PORT`, `HTTP_PROXY`) are honored as fallbacks.
+Some legacy bare names (`API_KEY`, `MODEL`, `PROVIDER`, `HOST`, `PORT`, `HTTP_PROXY`) are honored as fallbacks. The Knowledge Base `KB_*` vars are **unprefixed** and documented under the `[knowledge]` section above.
 
 ## Merge order
 
