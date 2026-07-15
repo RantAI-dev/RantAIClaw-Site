@@ -4,6 +4,8 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? ""
 
 const withNextra = nextra({
   contentDirBasePath: "/docs",
+  // Show a copy button on every fenced code block (opt out per-block with `copy=false`).
+  defaultShowCopyCode: true,
 })
 
 export default withNextra({
