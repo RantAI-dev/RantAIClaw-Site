@@ -1,7 +1,8 @@
 "use client"
 
-import { motion } from "motion/react"
+import { motion, useReducedMotion } from "motion/react"
 import type { ComponentProps } from "react"
+
 import { cn } from "@/lib/utils"
 import { defaultViewport, defaultTransition } from "@/lib/motion-variants"
 
@@ -18,12 +19,14 @@ export function MotionInView({
   transition = defaultTransition,
   ...rest
 }: MotionInViewProps) {
+  const shouldReduceMotion = useReducedMotion()
+
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={shouldReduceMotion ? false : { opacity: 0, y: 20 }}
       whileInView={{ opacity: 1, y: 0 }}
       viewport={viewport}
-      transition={transition}
+      transition={shouldReduceMotion ? { duration: 0 } : transition}
       className={cn(className)}
       {...rest}
     >
